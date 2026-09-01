@@ -1,0 +1,54 @@
+services:
+  mosquitto:
+    image: ${MOSQUITTO_IMAGE}
+    container_name: iot-mosquitto
+    restart: unless-stopped
+    ports:
+      - "192.168.104.10:1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: iot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # PostgreSQL 18+ official image uses /var/lib/postgresql as the volume root.
+      - postgres-data:/var/lib/postgresql
+
+  telegraf:
+    image: ${TELEGRAF_IMAGE}
+    user: telegraf
+    container_name: iot-telegraf
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+      - postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+
+  grafana:
+    image: ${GRAFANA_IMAGE}
+    container_name: iot-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  mosquitto-data:
+  postgres-data:
+  grafana-data:
