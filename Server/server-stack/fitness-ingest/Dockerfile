@@ -19,4 +19,4 @@ USER fitness
 
 EXPOSE 8080
 
-CMD ["python", "-u", "app.py"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
