@@ -43,6 +43,7 @@ if len(TOKEN_SECRET) != 32:
     raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with '  ssl rand -hex 32'")
 
 MQTT_FILTER = "users/+/fitness/#"
+security = HTTPBearer()
 
 # psychopg allows python to connect to a python database.
 # https://www.psycopg.org/psycopg3/docs/api/connections.html
@@ -304,11 +305,11 @@ def login_user(username: str, password: str) -> str:
         return user_id
 
 
-security = HTTPBearer()
 
 
+# https://fastapi.tiangolo.com/reference/security/#fastapi.security.HTTPBearer
 def user_from_bearer(creds: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    raw = creds.credentials
+    raw = creds.credentialsBaseModel
     try:
         user_id, token = raw.split(".", 1)
         UUID(user_id)
@@ -319,7 +320,7 @@ def user_from_bearer(creds: HTTPAuthorizationCredentials = Depends(security)) ->
     return user_id
 
 
-class AuthBody(BaseModel):
+class AuthBody():
     username: str
     password: str
 
@@ -333,6 +334,25 @@ class ProfileBody(BaseModel):
 class WeightBody(BaseModel):
     day: date
     weight_kg: float = Field(ge=20, le=400)
+
+
+class StepsBody(BaseModel):
+    date: date
+    steps: int = Field(ge=0)
+    goal: int = Field(ge=1)
+
+
+class VitalsBody(BaseModel):
+    timestamp: datetime
+    bpm: int = Field(ge=20, le=250)
+    spo2: int = Field(ge=0, le=100)
+
+
+class GPSBody(BaseModel):
+    timestamp: datetime
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    accuracy_m: float = Field(ge=0, default=0.0)
 
 
 def _parse_rfc3339_timestamp_query(value: str | None) -> datetime | None: # RFC3339 is a standard timestamp format
@@ -496,6 +516,76 @@ def put_weight(body: WeightBody, user_id: str = Depends(user_from_bearer)):
         )
         conn.commit()
     return {"day": body.day.isoformat(), "weight_kg": body.weight_kg}
+
+
+@app.post("/me/steps")
+def post_steps(body: StepsBody, user_id: str = Depends(user_from_bearer)):
+    payload = body.model_dump()
+    payload["user_id"] = user_id
+    with db() as conn:
+        owner = conn.execute(
+            "SELECT 1 FROM users WHERE id = %s", (user_id,)
+        ).fetchone()
+        if not owner:
+            raise HTTPException(404, "user not found")
+        err = handle_steps(conn, payload)
+        if err:
+            raise HTTPException(400, err)
+        conn.commit()
+    return {"ok": True, "date": body.date.isoformat(), "steps": body.steps, "goal": body.goal}
+
+
+@app.post("/me/vitals")
+def post_vitals(body: VitalsBody, user_id: str = Depends(user_from_bearer)):
+    ts = parse_timestamp(body.timestamp.isoformat())
+    if ts is None:
+        raise HTTPException(422, "timestamp must be RFC3339")
+    payload = {
+        "user_id": user_id,
+        "bpm": body.bpm,
+        "spo2": body.spo2,
+    }
+    with db() as conn:
+        owner = conn.execute(
+            "SELECT 1 FROM users WHERE id = %s", (user_id,)
+        ).fetchone()
+        if not owner:
+            raise HTTPException(404, "user not found")
+        err = handle_vitals(conn, payload, ts)
+        if err:
+            raise HTTPException(400, err)
+        conn.commit()
+    return {"ok": True, "timestamp": ts.isoformat(), "bpm": body.bpm, "spo2": body.spo2}
+
+
+@app.post("/me/gps")
+def post_gps(body: GPSBody, user_id: str = Depends(user_from_bearer)):
+    ts = parse_timestamp(body.timestamp.isoformat())
+    if ts is None:
+        raise HTTPException(422, "timestamp must be RFC3339")
+    payload = {
+        "user_id": user_id,
+        "lat": body.lat,
+        "lon": body.lon,
+        "accuracy_m": body.accuracy_m,
+    }
+    with db() as conn:
+        owner = conn.execute(
+            "SELECT 1 FROM users WHERE id = %s", (user_id,)
+        ).fetchone()
+        if not owner:
+            raise HTTPException(404, "user not found")
+        err = handle_gps(conn, payload, ts)
+        if err:
+            raise HTTPException(400, err)
+        conn.commit()
+    return {
+        "ok": True,
+        "timestamp": ts.isoformat(),
+        "lat": body.lat,
+        "lon": body.lon,
+        "accuracy_m": body.accuracy_m,
+    }
 
 
 @app.delete("/me/weight/{day}")
