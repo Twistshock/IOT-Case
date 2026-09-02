@@ -4,13 +4,13 @@
 from __future__ import annotations
 # Imports and reqs are detailed in the fitness-ingest/README.md markdown file.
 # They may also be briefly described where implemented.
-import hmac
+import hmac # https://docs.python.org/3/library/hmac.html
 import json
 import os
 import re
-import hashlib
+import hashlib # hashing functions
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager  # for creating async context managers for resource setup/cleanup
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
@@ -40,11 +40,15 @@ USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,32}$") # re is for regex, here we allo
 #Checks that our token secret in the ,env file is secure enough.
 TOKEN_SECRET = bytes.fromhex(os.environ["FITNESS_DEVICE_TOKEN_SECRET"])
 if len(TOKEN_SECRET) != 32:
-    raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with 'openssl rand -hex 32'")
+    raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with '  ssl rand -hex 32'")
 
 MQTT_FILTER = "users/+/fitness/#"
 
 # psychopg allows python to connect to a python database.
+# https://www.psycopg.org/psycopg3/docs/api/connections.html
+# Python note: -> = return type annotation
+# ie db() returns a psycopg.Connection type.
+# | None is appended in a lot of places to return None if items are invalid.
 def db() -> psycopg.Connection:
     return psycopg.connect(
         host=PG_HOST,
@@ -58,27 +62,27 @@ def device_token_for(user_id: str) -> str:
     return hmac.new(TOKEN_SECRET, user_id.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-# Verifies the presence of the seed user to ensure the DB is up an running.
+# Verifies the presence of the seed user to ensure the DB is up and running.
 def seed_user_ready() -> None:
     with db() as conn:
         exists = conn.execute(
-            "SELECT 1 FROM users WHERE id = %s", (SEED_USER_ID,)
-        ).fetchone()
+            "SELECT 1 FROM users WHERE id = %s", (SEED_USER_ID,)    #%s is a psychopg parameter placeholder for SQL that helps to prevent sql injection
+        ).fetchone()                                                #https://www.psycopg.org/psycopg3/docs/basic/params.html
         if not exists:
             print(f"seed user {SEED_USER_ID} missing — run migrate-fitness.sql")
             return
-        print(f"seed user ready: {SEED_USER_ID}")
+        print(f"seed user exists: {SEED_USER_ID}")
 
-# Verifies that the topic is valid.
+# Verifies that the topic is valid. Used for incoming messages.
 def parse_topic(topic: str) -> tuple[str, str] | None:
-    parts = topic.split("/")
-    if len(parts) != 4 or parts[0] != "users" or parts[2] != "fitness":
+    parts = topic.split("/") # Splits the topic
+    if len(parts) != 4 or parts[0] != "users" or parts[2] != "fitness": #
         return None
     kind = parts[3]
-    if kind not in ("steps", "vitals", "gps"):
+    if kind not in ("steps", "vitals", "gps"): # Check the kind of topoic we have
         return None
     try:
-        UUID(parts[1])
+        UUID(parts[1])  # Validate that the user ID is a valid UUID format
     except ValueError:
         return None
     return parts[1], kind
@@ -87,18 +91,18 @@ def parse_topic(topic: str) -> tuple[str, str] | None:
 def require_token(user_id: str, token: Any) -> bool:
     if not isinstance(token, str) or not token:
         return False
-    return hmac.compare_digest(token, device_token_for(user_id))
+    return hmac.compare_digest(token, device_token_for(user_id))  # returns a==b, more details at https://docs.python.org/3/library/hmac.html#hmac.compare_digest
 
 # Converts a timestamp to UTC and returns None if it is invalid.
 def parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))   # fromisoformat converts a an ISO 8601 date to a python date format.
+    except ValueError:                                              # RFC 3339 is a profile of ISO 8601
         return None
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.replace(tzinfo=timezone.utc) # Assume UTC0 if no timezone is supplied.
     return ts.astimezone(timezone.utc)
 
 # Validates and stores a user's daily step count and goal.
@@ -174,13 +178,13 @@ def on_message(_client: mqtt.Client, _userdata: Any, msg: mqtt.MQTTMessage) -> N
     if parsed is None:
         print(f"ignore topic {msg.topic}")
         return
-    user_id, kind = parsed
-    try:
+    user_id, kind = parsed #kind is steps, vitals, or gps from the MQTT topic
+    try: # Tries to parse the incoming json to a python dict
         body = json.loads(msg.payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc: #Malformed JSON
         print(f"bad json on {msg.topic}: {exc}")
         return
-    if not isinstance(body, dict):
+    if not isinstance(body, dict): # Verifies that our body is a valid dict format.
         print("payload is not an object")
         return
     if body.get("user_id") != user_id:
@@ -239,9 +243,9 @@ def clean_username(raw: str) -> str:
 def parse_auth_body(body: dict[str, Any]) -> tuple[str, str]:
     username = clean_username(str(body["username"]))
     password = str(body["password"])
-    if not USERNAME_RE.match(username):
-        raise ValueError("invalid username, the username must be all lower case and only include a-z, 0-9 and -_.")
-    if len(password) < 8:
+    if not USERNAME_RE.match(username): # Checks our username against the regex requirements
+        raise ValueError("invalid username, the username may only contain a-z, 0-9 and -_.")
+    if len(password) < 8: # Simple password length check
         raise ValueError("your password must be at least 8 characters long")
     return username, password
 
@@ -331,7 +335,7 @@ class WeightBody(BaseModel):
     weight_kg: float = Field(ge=20, le=400)
 
 
-def _parse_rfc3339_query(value: str | None) -> datetime | None:
+def _parse_rfc3339_timestamp_query(value: str | None) -> datetime | None: # RFC3339 is a standard timestamp format
     if value is None:
         return None
     ts = parse_timestamp(value)
@@ -340,6 +344,9 @@ def _parse_rfc3339_query(value: str | None) -> datetime | None:
     return ts
 
 
+# @asynccontextmanager makes this function run setup code when the app starts (before yield) 
+# Here it starts the DB and MQTT client.
+# A sample can be found at https://fastapi.tiangolo.com/advanced/events/#lifespan
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     seed_user_ready()
@@ -354,14 +361,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS (Cross-Origin Resource Sharing) middleware allows this API to accept requests from browsers
+# running on different domains. allow_origins=["*"] permits requests from any origin (tighten up after development).
+# https://fastapi.tiangolo.com/advanced/middleware/?h=add_middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow any origin to make requests
+    allow_methods=["*"],  # Allow any HTTP method (GET, POST, etc.)
+    allow_headers=["*"],  # Allow any headers in requests
 )
 
-
+# Swaggy endpoints (note: swaggy is a joke on swagger, and not a separate thing)
+# The @ symbol (decorator) tells FastAPI to create an HTTP GET route at /health that calls health()
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -539,10 +550,10 @@ def get_vitals(
     to_ts: str | None = Query(None, alias="to"),
     limit: int = Query(500, ge=1, le=5000),
 ):
-    start = _parse_rfc3339_query(from_ts)
-    end = _parse_rfc3339_query(to_ts)
+    start = _parse_rfc3339_timestamp_query(from_ts)
+    end = _parse_rfc3339_timestamp_query(to_ts)
     if start and end and start > end:
-        raise HTTPException(422, "from must be on or before to")
+        raise HTTPException(422, "from must match or precede the to-date")
     sql = """
         SELECT time, bpm, spo2
         FROM vitals
@@ -572,8 +583,8 @@ def get_gps(
     to_ts: str | None = Query(None, alias="to"),
     limit: int = Query(500, ge=1, le=5000),
 ):
-    start = _parse_rfc3339_query(from_ts)
-    end = _parse_rfc3339_query(to_ts)
+    start = _parse_rfc3339_timestamp_query(from_ts)
+    end = _parse_rfc3339_timestamp_query(to_ts)
     if start and end and start > end:
         raise HTTPException(422, "from must be on or before to")
     sql = """
