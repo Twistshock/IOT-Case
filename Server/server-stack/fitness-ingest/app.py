@@ -309,7 +309,9 @@ def login_user(username: str, password: str) -> str:
 
 # https://fastapi.tiangolo.com/reference/security/#fastapi.security.HTTPBearer
 def user_from_bearer(creds: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    raw = creds.credentialsBaseModel
+    raw = creds.credentials
+    if not isinstance(raw, str) or "." not in raw:
+        raise HTTPException(401, "invalid access_token")
     try:
         user_id, token = raw.split(".", 1)
         UUID(user_id)
@@ -320,7 +322,7 @@ def user_from_bearer(creds: HTTPAuthorizationCredentials = Depends(security)) ->
     return user_id
 
 
-class AuthBody():
+class AuthBody(BaseModel):
     username: str
     password: str
 
