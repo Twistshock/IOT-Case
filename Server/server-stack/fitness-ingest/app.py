@@ -246,10 +246,15 @@ def parse_auth_body(body: dict[str, Any]) -> tuple[str, str]:
     return username, password
 
 # Creates the device and access tokens for a user.
-def token_gen(user_id: str) -> dict[str, str]:
+def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
     tok = device_token_for(user_id)
     return {
-        "user_id": user_id,
+        "success": True,
+        "message": "",
+        "data": {
+            "username": username or "",
+            "user_id": user_id,
+        },
         "device_token": tok,
         "access_token": f"{user_id}.{tok}",
     }
@@ -263,7 +268,7 @@ def register_user(username: str, password: str) -> str:
             "SELECT id FROM users WHERE username = %s", (username,)
         ).fetchone()
         if row:
-            raise LookupError("username taken")
+            raise LookupError("username unavailable")
         row = conn.execute(
             """
             INSERT INTO users (id, username, password_hash)
@@ -366,7 +371,8 @@ def health():
 def auth_register(body: AuthBody):
     try:
         username, password = parse_auth_body(body.model_dump())
-        return token_gen(register_user(username, password))
+        user_id = register_user(username, password)
+        return token_gen(user_id, username)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except LookupError:
@@ -377,7 +383,8 @@ def auth_register(body: AuthBody):
 def auth_login(body: AuthBody):
     try:
         username, password = parse_auth_body(body.model_dump())
-        return token_gen(login_user(username, password))
+        user_id = login_user(username, password)
+        return token_gen(user_id, username)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except PermissionError:

@@ -14,7 +14,7 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
-
+# Test user for verifying the functionality.
 USER_ID="11111111-1111-1111-1111-111111111111"
 BROKER_HOST="${FITNESS_MQTT_HOST:-localhost}"
 BROKER_PORT="${FITNESS_MQTT_PORT:-1883}"
@@ -22,7 +22,7 @@ BROKER_PORT="${FITNESS_MQTT_PORT:-1883}"
 if [[ -z "${FITNESS_DEVICE_TOKEN_SECRET:-}" ]]; then
   echo "FITNESS_DEVICE_TOKEN_SECRET is not set in .env" >&2
   exit 1
-fi
+fi # fi closes if statements in shell scripts
 
 TOKEN="$(printf '%s' "$USER_ID" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${FITNESS_DEVICE_TOKEN_SECRET}" | awk '{print $NF}')"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
