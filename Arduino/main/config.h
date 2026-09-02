@@ -4,7 +4,8 @@
 enum ScreenId
 {
     HOME_SCREEN,
-    LOADING_SCREEN
+    LOADING_SCREEN,
+    HEART_RATE_SCREEN
 };
 
 // The screen currently being drawn; shared by every module

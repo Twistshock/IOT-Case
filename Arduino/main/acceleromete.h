@@ -66,7 +66,6 @@ bool readAcceleration(int16_t &x, int16_t &y, int16_t &z)
 
 void AccelerometeInit()
 {
-    Serial.begin(115200);
     delay(1000);
 
     Wire.begin(SDA_PIN, SCL_PIN);

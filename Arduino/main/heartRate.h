@@ -112,8 +112,8 @@ inline void HeartRateLoop()
     // Data is arriving but the measurement is not usable yet
     if (!IsValidHeartRateReading(heartRate, spo2))
     {
-        ACTIVE_SCREEN = LOADING_SCREEN;
-
+        /* ACTIVE_SCREEN = LOADING_SCREEN;
+ */
         Serial.println(
             "Measuring... Keep your finger still."
         );
@@ -154,7 +154,7 @@ inline void HeartRateLoop()
     Serial.print(LAST_SENSOR_TEMPERATURE, 1);
     Serial.println(" C");
 
-    RunVibration();
+    //RunVibration();
 }
 
 inline bool IsFingerDetected()

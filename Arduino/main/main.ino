@@ -3,6 +3,7 @@
 #include "display.h"
 #include "heartRate.h"
 #include "vibration.h"
+#include "BLEDevice.h"
 
 void setup() {
     Serial.begin(115200);
@@ -12,14 +13,16 @@ void setup() {
     AccelerometeInit();
     HeartRateInit();
     VibrationInit();
+    BLEDeviceInit();
 
     ACTIVE_SCREEN = HOME_SCREEN;
 
     // Initial home-screen values
     DisplayHomeScreen(
         0,      // Steps
-        0,      // Heart rate in BPM
-        0,      // Blood oxygen in %
+        0.0f,   // Burned kcal
+        0,      // Heart rate in bpm
+        0,      // SpO2 percentage
         0.0f    // Temperature in Celsius
     );
 }
@@ -31,13 +34,22 @@ void loop() {
 
   if (ACTIVE_SCREEN == HOME_SCREEN) {
     DisplayHomeScreen(
-        STEPS,        // Steps
-        HEART_RATE,   // Heart rate in BPM
-        BLOOD_OXYGEN, // Blood oxygen in %
-        TEMPERATURE   // Temperature in Celsius
+        STEPS,         // Steps
+        BURNED_KCAL,   // Burned kcal
+        HEART_RATE,    // Heart rate in bpm
+        BLOOD_OXYGEN,  // SpO2 percentage
+        TEMPERATURE    // Temperature in Celsius
     );
   }
   else if (ACTIVE_SCREEN == LOADING_SCREEN) {
     DisplayLoadingScreen("Keep your finger still..");
+  }
+  else if (ACTIVE_SCREEN == HEART_RATE_SCREEN) {
+    DisplayHeartRateScreen(
+        HEART_RATE,     // Beats per minute
+        BLOOD_OXYGEN,   // SpO2 percentage
+        TEMPERATURE,    // Temperature in Celsius
+        IsFingerDetected()
+    );
   }
 }

@@ -42,11 +42,13 @@ inline void DrawValueRight(int baselineY, const char *value)
 }
 
 // Display the fitness tracker home screen
+// Parameters follow the order the rows are drawn in
 inline void DisplayHomeScreen(
     uint32_t steps,
-    uint16_t heartRate,
-    uint16_t bloodOxygen,
-    float temperature)
+    float bruned_kcal = 0,
+    uint16_t heartRate = 0,
+    uint16_t bloodOxygen = 0,
+    float temperature = 0.0f)
 {
     char value[20];
 
@@ -60,24 +62,151 @@ inline void DisplayHomeScreen(
     oled.drawHLine(0, 13, 128);
 
     // Steps
-    oled.drawStr(2, 27, "Steps:");
+    oled.drawStr(2, 25, "Steps:");
     snprintf(value, sizeof(value), "%lu", (unsigned long)steps);
-    DrawValueRight(27, value);
+    DrawValueRight(25, value);
 
-    // Heart rate
-    oled.drawStr(2, 39, "Heart:");
-    snprintf(value, sizeof(value), "%u bpm", heartRate);
-    DrawValueRight(39, value);
+    // Burned Kcal
+    oled.drawStr(2, 36, "Burned kcal:");
+    snprintf(value, sizeof(value), "%.1f", bruned_kcal);
+    DrawValueRight(36, value);
 
-    // Blood oxygen saturation
-    oled.drawStr(2, 51, "SpO2:");
-    snprintf(value, sizeof(value), "%u %%", bloodOxygen);
-    DrawValueRight(51, value);
+    // Heart rate and blood oxygen share one line
+    if (heartRate > 0)
+        snprintf(value, sizeof(value), "HR:%u bpm", heartRate);
+    else
+        snprintf(value, sizeof(value), "HR:-- bpm");
+
+    oled.drawStr(2, 47, value);
+
+    if (bloodOxygen > 0)
+        snprintf(value, sizeof(value), "SpO2:%u%%", bloodOxygen);
+    else
+        snprintf(value, sizeof(value), "SpO2:--%%");
+
+    DrawValueRight(47, value);
+
+    // Divider above the temperature
+    oled.drawHLine(0, 51, 128);
 
     // Temperature
-    oled.drawStr(2, 63, "Temp:");
+    oled.drawStr(2, 62, "Temp:");
     snprintf(value, sizeof(value), "%.1f C", temperature);
-    DrawValueRight(63, value);
+    DrawValueRight(62, value);
+
+    oled.sendBuffer();
+}
+
+
+// Draw a small heart made of two lobes and a point
+inline void DrawHeartIcon(int centerX, int centerY, int radius)
+{
+    oled.drawDisc(centerX - radius + 1, centerY, radius);
+    oled.drawDisc(centerX + radius - 1, centerY, radius);
+
+    oled.drawTriangle(
+        centerX - (radius * 2) + 1, centerY,
+        centerX + (radius * 2) - 1, centerY,
+        centerX, centerY + (radius * 2)
+    );
+}
+
+// Live heart-rate screen, drawn while the sensor runs continuously
+inline void DisplayHeartRateScreen(
+    uint16_t heartRate,
+    uint16_t bloodOxygen,
+    float temperature,
+    bool fingerDetected)
+{
+    static unsigned long lastRefreshTime = 0;
+    static unsigned long lastPulseTime = 0;
+    static bool pulseExpanded = false;
+
+    constexpr unsigned long REFRESH_INTERVAL = 100;
+    constexpr unsigned long PULSE_INTERVAL = 400;
+
+    // Keep the I2C bus free between redraws
+    if (millis() - lastRefreshTime < REFRESH_INTERVAL)
+        return;
+
+    lastRefreshTime = millis();
+
+    // The heart only beats once a reading is coming in
+    if (heartRate > 0 && millis() - lastPulseTime >= PULSE_INTERVAL)
+    {
+        lastPulseTime = millis();
+        pulseExpanded = !pulseExpanded;
+    }
+
+    char value[20];
+
+    oled.clearBuffer();
+
+    // Header
+    oled.setFont(u8g2_font_6x12_tr);
+
+    const char *title = "HEART RATE";
+    oled.drawStr((128 - oled.getStrWidth(title)) / 2, 10, title);
+
+    // Divider under the header
+    oled.drawHLine(0, 13, 128);
+
+    // Reading, or placeholders until the sensor locks on
+    if (heartRate > 0)
+        snprintf(value, sizeof(value), "%u", heartRate);
+    else
+        snprintf(value, sizeof(value), "--");
+
+    oled.setFont(u8g2_font_ncenB14_tr);
+    int valueWidth = oled.getStrWidth(value);
+
+    oled.setFont(u8g2_font_6x12_tr);
+    int unitWidth = oled.getStrWidth("bpm");
+
+    constexpr int HEART_BLOCK = 20;
+    constexpr int GAP = 6;
+
+    int blockWidth = HEART_BLOCK + GAP + valueWidth + 4 + unitWidth;
+    int blockX = (128 - blockWidth) / 2;
+
+    if (blockX < 0)
+        blockX = 0;
+
+    // Beating heart on the left of the reading
+    int radius = (heartRate > 0 && pulseExpanded) ? 5 : 4;
+    DrawHeartIcon(blockX + (HEART_BLOCK / 2), 31, radius);
+
+    int valueX = blockX + HEART_BLOCK + GAP;
+
+    oled.setFont(u8g2_font_ncenB14_tr);
+    oled.drawStr(valueX, 40, value);
+
+    oled.setFont(u8g2_font_6x12_tr);
+    oled.drawStr(valueX + valueWidth + 4, 40, "bpm");
+
+    // Divider above the footer
+    oled.drawHLine(0, 48, 128);
+
+    // Prompt while there is nothing on the sensor
+    if (!fingerDetected)
+    {
+        const char *hint = "Place your finger";
+        oled.drawStr((128 - oled.getStrWidth(hint)) / 2, 61, hint);
+
+        oled.sendBuffer();
+        return;
+    }
+
+    // Supporting values once the finger is on the sensor
+    if (bloodOxygen > 0)
+        snprintf(value, sizeof(value), "SpO2:%u%%", bloodOxygen);
+    else
+        snprintf(value, sizeof(value), "SpO2:--");
+
+    oled.drawStr(2, 61, value);
+
+    snprintf(value, sizeof(value), "%.1f C", temperature);
+    DrawValueRight(61, value);
 
     oled.sendBuffer();
 }

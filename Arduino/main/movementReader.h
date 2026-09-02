@@ -1,46 +1,80 @@
 #ifndef MOVEMENT_READER_H
 #define MOVEMENT_READER_H
 
-
+#include <Arduino.h>
 #include <math.h>
 
-uint32_t STEPS = 0;
-float BRUNED_KCAL = 0.0f;
 
-unsigned long stepCount = 0;
+// Public fitness values
+uint32_t STEPS = 0;
+float BURNED_KCAL = 0.0f;
+
+// Step-detection state
 unsigned long lastStepTime = 0;
 unsigned long lastMovementTime = 0;
 
-
-float gravityEstimate = 0;
+float gravityEstimate = 0.0f;
 bool aboveThreshold = false;
 
-const float STEP_THRESHOLD = 120.0;
-const float RESET_THRESHOLD = 50.0;
+// Adjust these values after testing your accelerometer
+const float STEP_THRESHOLD = 120.0f;
+const float RESET_THRESHOLD = 50.0f;
 
 const unsigned long MIN_STEP_INTERVAL = 250;
 const unsigned long MAX_STEP_INTERVAL = 1500;
 
+// Approximate calories burned per step
+const float KCAL_PER_STEP = 0.04f;
+
+// True while steps are still arriving, used to pick the heart-rate interval
+inline bool IsWalking()
+{
+    if (lastMovementTime == 0)
+        return false;
+
+    return (millis() - lastMovementTime) < MAX_STEP_INTERVAL;
+}
+
 void detectStep(int16_t x, int16_t y, int16_t z)
 {
-    float magnitude = sqrt(
-        (float)x * x +
-        (float)y * y +
-        (float)z * z
+    /*
+     * Total acceleration:
+     *
+     * a = sqrt(x² + y² + z²)
+     */
+    float accelerationMagnitude = sqrtf(
+        ((float)x * (float)x) +
+        ((float)y * (float)y) +
+        ((float)z * (float)z)
     );
 
-    // Estimate and remove the gravity component
-    if (gravityEstimate == 0)
-        gravityEstimate = magnitude;
+    // Initialize the gravity estimate using the first measurement
+    if (gravityEstimate == 0.0f)
+    {
+        gravityEstimate = accelerationMagnitude;
+        return;
+    }
 
+    /*
+     * Low-pass filter:
+     * Slowly follows gravity and device orientation.
+     */
     gravityEstimate =
-        (gravityEstimate * 0.90) +
-        (magnitude * 0.10);
+        (gravityEstimate * 0.90f) +
+        (accelerationMagnitude * 0.10f);
 
-    float movement = fabs(magnitude - gravityEstimate);
+    // Remove the estimated gravity component
+    float movement =
+        fabsf(accelerationMagnitude - gravityEstimate);
+
     unsigned long currentTime = millis();
 
-    // Detect the beginning of an acceleration peak
+    /*
+     * Count a step when:
+     * 1. Movement crosses the step threshold.
+     * 2. The previous peak has ended.
+     * 3. Enough time has passed since the previous step.
+     */
     if (movement > STEP_THRESHOLD && !aboveThreshold)
     {
         aboveThreshold = true;
@@ -50,35 +84,44 @@ void detectStep(int16_t x, int16_t y, int16_t z)
 
         if (timeSinceLastStep >= MIN_STEP_INTERVAL)
         {
-            stepCount++;
+            STEPS++;
             lastStepTime = currentTime;
             lastMovementTime = currentTime;
 
+            BURNED_KCAL = STEPS * KCAL_PER_STEP;
+
             Serial.print("STEP! Total: ");
-            Serial.println(stepCount);
-            STEPS = stepCount + STEPS;
+            Serial.print(STEPS);
+
+            Serial.print(" | Burned kcal: ");
+            Serial.println(BURNED_KCAL, 2);
         }
     }
 
-    // The signal must fall before another step can be counted
+    // Movement must fall below this value before a new peak counts
     if (movement < RESET_THRESHOLD)
     {
         aboveThreshold = false;
     }
 
-    bool walking =
-        currentTime - lastMovementTime < MAX_STEP_INTERVAL;
+    bool walking = IsWalking();
 
+    if (walking)
+    {
+        Serial.print("Acceleration: ");
+        Serial.print(accelerationMagnitude);
 
-    if(walking != 0){
-      Serial.print("Movement:");
-      Serial.print(movement);
+        Serial.print(" | Movement: ");
+        Serial.print(movement);
 
-      Serial.print(",Steps:");
-      Serial.print(stepCount);
+        Serial.print(" | Steps: ");
+        Serial.print(STEPS);
 
-      Serial.print(",Walking:");
-      Serial.println(walking ? 1 : 0);
+        Serial.print(" | Walking: ");
+        Serial.println(walking ? 1 : 0);
+        Serial.print(" | Walking: ");
+        Serial.println(walking ? 1 : 0);
+
     }
 }
 
