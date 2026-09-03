@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useContext } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DeviceRow from '../components/DeviceRow';
 import { useBle } from '../context/BleContext';
 import { colors } from '../constants/colors';
+import { UserContext } from '../context/userContext';
 
 const PAGE_PADDING = 20;
 const MAX_CONTENT_WIDTH = 600;
@@ -54,6 +55,7 @@ export default function DeviceScreen() {
   // Text typed into the box that gets written to the ESP32 characteristic.
   const [message, setMessage] = useState('');
   const logRef = useRef(null);
+  const { user } = useContext(UserContext);
 
   const handleSend = async () => {
     const text = message.trim();
@@ -77,7 +79,7 @@ export default function DeviceScreen() {
     const currentTime = new Date().toISOString();
     const payload = {
       timestamp: currentTime,
-      username: 'testuser', // Replace with actual username if available
+      username: user?.username || '...', // Replace with actual username if available
       type: 'device_connected',
     }
 

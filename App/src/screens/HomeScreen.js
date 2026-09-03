@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useContext, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import HealthCard from '../components/HealthCard';
 import { healthData, PLACEHOLDER } from '../data/healthData';
 import { parseTrackerStats } from '../utils/trackerStats';
 import { colors } from '../constants/colors';
+import { UserContext } from '../context/userContext';
+import { SaveBpm, getStepsFromESP32 } from '../services/dashbroad';
 
 
 const PAGE_PADDING = 20; // space on the left and right of the screen
@@ -20,6 +22,8 @@ const MAX_CONTENT_WIDTH = 600; // keeps the layout tidy on tablets
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
+  const { user } = useContext(UserContext);
+
 
   // Two cards per row on normal phones, one card per row on very small screens.
   const columns = width >= 340 ? 2 : 1;
@@ -34,14 +38,15 @@ export default function HomeScreen() {
   const [currentSpo2, setCurrentSpo2] = useState(0);
   const [currentTemp, setCurrentTemp] = useState(0);
 
+
   // Every line that arrives, JSON or not - the same text the device screen
   // shows in its log, so anything the tracker sends is visible here too.
-  const { isConnected, lastMessage } = useBleMessages((text) => {
+  const { isConnected, send, lastMessage } = useBleMessages(async (text) => {
     if (!isConnected) return;
     const parsed = parseTrackerStats(text);
 
     // Only a stats packet refreshes the cards; other lines are left alone so
-    if (parsed) {
+    if (parsed && parsed.type === 'steps' || parsed.type === "bpm") {
       setStats({
         steps: parsed.steps == null ? currentSteps : parsed.steps,
         bpm: parsed.bpm == null ? currentBpm : parsed.bpm,
@@ -52,10 +57,27 @@ export default function HomeScreen() {
       setCurrentBpm(parsed.bpm == null ? currentBpm : parsed.bpm);
       setCurrentSpo2(parsed.spo2 == null ? currentSpo2 : parsed.spo2);
       setCurrentTemp(parsed.temp == null ? currentTemp : parsed.temp);
+
+
+      // Fire and forget: a failed upload must not interrupt the live cards,
+      // but the rejection still needs a handler or RN logs it as unhandled.
+      if(parsed.bpm != null || parsed.spo2 != null || parsed.temp != null) {
+        await SaveBpm(parsed);
+      }
     }
 
     console.log('From tracker:', text, '-> stats:', parsed);
   });
+
+  // Ask for the step count once the tracker is actually there; the answer
+  // comes back through the handler above, not from getSteps itself.
+  useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+    getStepsFromESP32(send).catch((e) => console.warn(e.message));
+  }, [isConnected, send]);
+  
 
   return (
     <View style={styles.safeArea}>
@@ -64,6 +86,7 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
+          <Text style={styles.greeting}>Hello, {user?.username || 'User'}!</Text>
           <Text style={styles.heading}>Today's Summary</Text>
           <Text style={styles.status}>
             {isConnected
