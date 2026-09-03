@@ -3,7 +3,7 @@
 #include "display.h"
 #include "heartRate.h"
 #include "vibration.h"
-#include "BLEDevice.h"
+#include "ble.h"
 
 void setup() {
     Serial.begin(115200);

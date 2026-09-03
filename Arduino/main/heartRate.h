@@ -8,6 +8,7 @@
 #include "display.h"
 #include "config.h"
 #include "vibration.h"
+#include "ble.h"
 
 #define HEART_SDA 16
 #define HEART_SCL 17
@@ -154,7 +155,14 @@ inline void HeartRateLoop()
     Serial.print(LAST_SENSOR_TEMPERATURE, 1);
     Serial.println(" C");
 
-    //RunVibration();
+    String message =
+    "{\"bpm\":" + String(LAST_HEART_RATE) +
+    ",\"spo2\":" + String(LAST_SPO2) +
+    ",\"temp\":" + String(LAST_SENSOR_TEMPERATURE, 1) +
+    "}";
+
+    Serial.print(message);
+    BLESendMessage(message.c_str());
 }
 
 inline bool IsFingerDetected()
