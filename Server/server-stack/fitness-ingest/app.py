@@ -109,7 +109,8 @@ def parse_timestamp(value: Any) -> datetime | None:
 # Validates and stores a user's daily step count and goal.
 def handle_steps(conn: psycopg.Connection, body: dict[str, Any]) -> str | None:
     try:
-        day = date.fromisoformat(body["date"])
+        raw_day = body["date"]
+        day = raw_day if isinstance(raw_day, date) else date.fromisoformat(raw_day) # To handle both ISO dates and MQTT date strings.
         steps = int(body["steps"])
         goal = int(body["goal"])
     except (KeyError, TypeError, ValueError):
