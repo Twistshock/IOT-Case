@@ -4,13 +4,14 @@
 from __future__ import annotations
 # Imports and reqs are detailed in the fitness-ingest/README.md markdown file.
 # They may also be briefly described where implemented.
-import hmac
+import hmac # https://docs.python.org/3/library/hmac.html
 import json
 import os
 import re
-import hashlib
+import hashlib # hashing functions
 import threading
-from contextlib import asynccontextmanager
+from defs import api_defs
+from contextlib import asynccontextmanager  # for creating async context managers for resource setup/cleanup
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
@@ -21,7 +22,6 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 # os.environ gets environment variables.
@@ -40,11 +40,16 @@ USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,32}$") # re is for regex, here we allo
 #Checks that our token secret in the ,env file is secure enough.
 TOKEN_SECRET = bytes.fromhex(os.environ["FITNESS_DEVICE_TOKEN_SECRET"])
 if len(TOKEN_SECRET) != 32:
-    raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with 'openssl rand -hex 32'")
+    raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with '  ssl rand -hex 32'")
 
 MQTT_FILTER = "users/+/fitness/#"
+security = HTTPBearer()
 
 # psychopg allows python to connect to a python database.
+# https://www.psycopg.org/psycopg3/docs/api/connections.html
+# Python note: -> = return type annotation
+# ie db() returns a psycopg.Connection type.
+# | None is appended in a lot of places to return None if items are invalid.
 def db() -> psycopg.Connection:
     return psycopg.connect(
         host=PG_HOST,
@@ -58,27 +63,27 @@ def device_token_for(user_id: str) -> str:
     return hmac.new(TOKEN_SECRET, user_id.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-# Verifies the presence of the seed user to ensure the DB is up an running.
+# Verifies the presence of the seed user to ensure the DB is up and running.
 def seed_user_ready() -> None:
     with db() as conn:
         exists = conn.execute(
-            "SELECT 1 FROM users WHERE id = %s", (SEED_USER_ID,)
-        ).fetchone()
+            "SELECT 1 FROM users WHERE id = %s", (SEED_USER_ID,)    #%s is a psychopg parameter placeholder for SQL that helps to prevent sql injection
+        ).fetchone()                                                #https://www.psycopg.org/psycopg3/docs/basic/params.html
         if not exists:
             print(f"seed user {SEED_USER_ID} missing — run migrate-fitness.sql")
             return
-        print(f"seed user ready: {SEED_USER_ID}")
+        print(f"seed user exists: {SEED_USER_ID}")
 
-# Verifies that the topic is valid.
+# Verifies that the topic is valid. Used for incoming messages.
 def parse_topic(topic: str) -> tuple[str, str] | None:
-    parts = topic.split("/")
-    if len(parts) != 4 or parts[0] != "users" or parts[2] != "fitness":
+    parts = topic.split("/") # Splits the topic
+    if len(parts) != 4 or parts[0] != "users" or parts[2] != "fitness": #
         return None
     kind = parts[3]
-    if kind not in ("steps", "vitals", "gps"):
+    if kind not in ("steps", "vitals", "gps"): # Check the kind of topoic we have
         return None
     try:
-        UUID(parts[1])
+        UUID(parts[1])  # Validate that the user ID is a valid UUID format
     except ValueError:
         return None
     return parts[1], kind
@@ -87,24 +92,25 @@ def parse_topic(topic: str) -> tuple[str, str] | None:
 def require_token(user_id: str, token: Any) -> bool:
     if not isinstance(token, str) or not token:
         return False
-    return hmac.compare_digest(token, device_token_for(user_id))
+    return hmac.compare_digest(token, device_token_for(user_id))  # returns a==b, more details at https://docs.python.org/3/library/hmac.html#hmac.compare_digest
 
 # Converts a timestamp to UTC and returns None if it is invalid.
 def parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))   # fromisoformat converts a an ISO 8601 date to a python date format.
+    except ValueError:                                              # RFC 3339 is a profile of ISO 8601
         return None
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.replace(tzinfo=timezone.utc) # Assume UTC0 if no timezone is supplied.
     return ts.astimezone(timezone.utc)
 
 # Validates and stores a user's daily step count and goal.
 def handle_steps(conn: psycopg.Connection, body: dict[str, Any]) -> str | None:
     try:
-        day = date.fromisoformat(body["date"])
+        raw_day = body["date"]
+        day = raw_day if isinstance(raw_day, date) else date.fromisoformat(raw_day) # To handle both ISO dates and MQTT date strings.
         steps = int(body["steps"])
         goal = int(body["goal"])
     except (KeyError, TypeError, ValueError):
@@ -174,13 +180,13 @@ def on_message(_client: mqtt.Client, _userdata: Any, msg: mqtt.MQTTMessage) -> N
     if parsed is None:
         print(f"ignore topic {msg.topic}")
         return
-    user_id, kind = parsed
-    try:
+    user_id, kind = parsed #kind is steps, vitals, or gps from the MQTT topic
+    try: # Tries to parse the incoming json to a python dict
         body = json.loads(msg.payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc: #Malformed JSON
         print(f"bad json on {msg.topic}: {exc}")
         return
-    if not isinstance(body, dict):
+    if not isinstance(body, dict): # Verifies that our body is a valid dict format.
         print("payload is not an object")
         return
     if body.get("user_id") != user_id:
@@ -239,21 +245,71 @@ def clean_username(raw: str) -> str:
 def parse_auth_body(body: dict[str, Any]) -> tuple[str, str]:
     username = clean_username(str(body["username"]))
     password = str(body["password"])
-    if not USERNAME_RE.match(username):
-        raise ValueError("invalid username, the username must be all lower case and only include a-z, 0-9 and -_.")
-    if len(password) < 8:
+    if not USERNAME_RE.match(username): # Checks our username against the regex requirements
+        raise ValueError("invalid username, the username may only contain a-z, 0-9 and -_.")
+    if len(password) < 8: # Simple password length check
         raise ValueError("your password must be at least 8 characters long")
     return username, password
 
 # Creates the device and access tokens for a user.
-def token_gen(user_id: str) -> dict[str, str]:
+# User can't have a profile on first registration.
+def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
     tok = device_token_for(user_id)
     return {
-        "user_id": user_id,
+        "success": True,
+        "message": "",
+        "data": {
+            "username": username or "",
+            "user_id": user_id,
+        },
         "device_token": tok,
         "access_token": f"{user_id}.{tok}",
     }
 
+# Creates the device and access tokens for a user.
+def token_gen_login(user_id: str, username: str | None = None) -> dict[str, Any]:
+    tok = device_token_for(user_id)
+    with db() as conn:
+        profile_row = conn.execute(
+            """
+            SELECT display_name, sex, height_cm
+            FROM user_profiles
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        ).fetchone()
+        weight_row = conn.execute("""
+            SELECT day, weight_kg
+            FROM weight_entries
+            WHERE user_id = %s
+            ORDER BY day DESC
+            LIMIT 1
+            """,
+            (user_id,)
+        ).fetchone()
+        data:dict[str, Any] = {
+            "username": username or "",
+            "user_id": user_id,
+        }
+        if profile_row:
+            data["profile"] = {
+                "display_name": profile_row[0],
+                "sex": profile_row[1],
+                "height_cm": profile_row[2],
+            }
+
+        if weight_row:
+            data.setdefault("profile", {})
+            data["profile"]["weight_kg"] = float(weight_row[1])
+            data["profile"]["weight_day"] = weight_row[0].isoformat()
+
+    return {
+        "success": True,
+        "message": "",
+        "data": data,
+        "device_token": tok,
+        "access_token": f"{user_id}.{tok}",
+    }
 
 def register_user(username: str, password: str) -> str:
     """Unknown username → INSERT a new user. Taken username → LookupError."""
@@ -263,7 +319,7 @@ def register_user(username: str, password: str) -> str:
             "SELECT id FROM users WHERE username = %s", (username,)
         ).fetchone()
         if row:
-            raise LookupError("username taken")
+            raise LookupError("username unavailable")
         row = conn.execute(
             """
             INSERT INTO users (id, username, password_hash)
@@ -279,7 +335,6 @@ def register_user(username: str, password: str) -> str:
 
 
 def login_user(username: str, password: str) -> str:
-    """Verify Argon2id hash. Never INSERT. Bad credentials → PermissionError."""
     with db() as conn:
         row = conn.execute(
             "SELECT id, password_hash FROM users WHERE username = %s",
@@ -295,11 +350,13 @@ def login_user(username: str, password: str) -> str:
         return user_id
 
 
-security = HTTPBearer()
 
 
+# https://fastapi.tiangolo.com/reference/security/#fastapi.security.HTTPBearer
 def user_from_bearer(creds: HTTPAuthorizationCredentials = Depends(security)) -> str:
     raw = creds.credentials
+    if not isinstance(raw, str) or "." not in raw:
+        raise HTTPException(401, "invalid access_token")
     try:
         user_id, token = raw.split(".", 1)
         UUID(user_id)
@@ -326,7 +383,26 @@ class WeightBody(BaseModel):
     weight_kg: float = Field(ge=20, le=400)
 
 
-def _parse_rfc3339_query(value: str | None) -> datetime | None:
+class StepsBody(BaseModel):
+    date: date
+    steps: int = Field(ge=0)
+    goal: int = Field(ge=1)
+
+
+class VitalsBody(BaseModel):
+    timestamp: datetime
+    bpm: int = Field(ge=20, le=250)
+    spo2: int = Field(ge=0, le=100)
+
+
+class GPSBody(BaseModel):
+    timestamp: datetime
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    accuracy_m: float = Field(ge=0, default=0.0)
+
+
+def _parse_rfc3339_timestamp_query(value: str | None) -> datetime | None: # RFC3339 is a standard timestamp format
     if value is None:
         return None
     ts = parse_timestamp(value)
@@ -335,6 +411,9 @@ def _parse_rfc3339_query(value: str | None) -> datetime | None:
     return ts
 
 
+# @asynccontextmanager makes this function run setup code when the app starts (before yield) 
+# Here it starts the DB and MQTT client.
+# A sample can be found at https://fastapi.tiangolo.com/advanced/events/#lifespan
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     seed_user_ready()
@@ -349,92 +428,50 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS (Cross-Origin Resource Sharing) middleware allows this API to accept requests from browsers
+# running on different domains. allow_origins=["*"] permits requests from any origin (tighten up after development).
+# https://fastapi.tiangolo.com/advanced/middleware/?h=add_middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow any origin to make requests
+    allow_methods=["*"],  # Allow any HTTP method (GET, POST, etc.)
+    allow_headers=["*"],  # Allow any headers in requests
 )
 
-
+# Swaggy endpoints (note: swaggy is a joke on swagger, and not a separate thing)
+# The @ symbol (decorator) tells FastAPI to create an HTTP GET route at /health that calls health()
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
 @app.post("/auth/register")
-def auth_register(body: AuthBody):
-    try:
-        username, password = parse_auth_body(body.model_dump())
-        return token_gen(register_user(username, password))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    except LookupError:
-        raise HTTPException(409, "username taken")
+def auth_register(
+    body: AuthBody
+):
+    return api_defs.auth_register(body, parse_auth_body, register_user, token_gen)
 
 
 @app.post("/auth/login")
-def auth_login(body: AuthBody):
-    try:
-        username, password = parse_auth_body(body.model_dump())
-        return token_gen(login_user(username, password))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    except PermissionError:
-        raise HTTPException(401, "bad credentials")
+def auth_login(
+    body: AuthBody
+):
+    return api_defs.auth_login(body, parse_auth_body, login_user, token_gen_login)
 
 
 @app.get("/me/profile")
-def get_profile(user_id: str = Depends(user_from_bearer)):
-    with db() as conn:
-        row = conn.execute(
-            """
-            SELECT display_name, sex, height_cm
-            FROM user_profiles
-            WHERE user_id = %s
-            """,
-            (user_id,),
-        ).fetchone()
-        if not row:
-            return JSONResponse({"error": "no profile yet"}, status_code=404)
-        payload: dict[str, Any] = {
-            "display_name": row[0],
-            "sex": row[1],
-            "height_cm": row[2],
-        }
-        weight = conn.execute(
-            """
-            SELECT day, weight_kg
-            FROM weight_entries
-            WHERE user_id = %s
-            ORDER BY day DESC
-            LIMIT 1
-            """,
-            (user_id,),
-        ).fetchone()
-        if weight:
-            payload["latest_weight_kg"] = float(weight[1])
-            payload["latest_weight_day"] = weight[0].isoformat()
-        return payload
+def get_profile(
+    user_id: str = Depends(user_from_bearer)
+):
+    return api_defs.get_profile(user_id, db)
 
 
 @app.put("/me/profile")
-def put_profile(body: ProfileBody, user_id: str = Depends(user_from_bearer)):
-    with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_profiles (user_id, display_name, sex, height_cm, updated_at)
-            VALUES (%s, %s, %s, %s, now())
-            ON CONFLICT (user_id) DO UPDATE SET
-                display_name = EXCLUDED.display_name,
-                sex = EXCLUDED.sex,
-                height_cm = EXCLUDED.height_cm,
-                updated_at = now()
-            """,
-            (user_id, body.display_name, body.sex, body.height_cm),
-        )
-        conn.commit()
-    return {"display_name": body.display_name, "sex": body.sex, "height_cm": body.height_cm}
+def put_profile(
+    body: ProfileBody,
+    user_id: str = Depends(user_from_bearer)
+):
+    return api_defs.put_profile(body, user_id, db)
 
 
 @app.get("/me/weight")
@@ -443,52 +480,47 @@ def get_weight(
     from_day: date | None = Query(None, alias="from"),
     to_day: date | None = Query(None, alias="to"),
 ):
-    if from_day and to_day and from_day > to_day:
-        raise HTTPException(422, "from must be on or before to")
-    sql = """
-        SELECT day, weight_kg
-        FROM weight_entries
-        WHERE user_id = %s
-    """
-    params: list[Any] = [user_id]
-    if from_day:
-        sql += " AND day >= %s"
-        params.append(from_day)
-    if to_day:
-        sql += " AND day <= %s"
-        params.append(to_day)
-    sql += " ORDER BY day ASC"
-    with db() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [{"day": row[0].isoformat(), "weight_kg": float(row[1])} for row in rows]
+    return api_defs.get_weight(user_id, from_day, to_day, db)
 
 
 @app.put("/me/weight")
-def put_weight(body: WeightBody, user_id: str = Depends(user_from_bearer)):
-    with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO weight_entries (user_id, day, weight_kg, updated_at)
-            VALUES (%s, %s, %s, now())
-            ON CONFLICT (user_id, day) DO UPDATE SET
-                weight_kg = EXCLUDED.weight_kg,
-                updated_at = now()
-            """,
-            (user_id, body.day, body.weight_kg),
-        )
-        conn.commit()
-    return {"day": body.day.isoformat(), "weight_kg": body.weight_kg}
+def put_weight(
+    body: WeightBody,
+    user_id: str = Depends(user_from_bearer)
+):
+    return api_defs.put_weight(body, user_id, db)
+
+
+@app.post("/me/steps")
+def post_steps(
+    body: StepsBody,
+    user_id: str = Depends(user_from_bearer)
+    ):
+    return api_defs.post_steps(body, user_id, db, handle_steps)
+
+
+@app.post("/me/vitals")
+def post_vitals(
+    body: VitalsBody,
+    user_id:str = Depends(user_from_bearer)
+):
+    return api_defs.post_vitals(body, user_id, db, parse_timestamp, handle_vitals)
+
+
+@app.post("/me/gps")
+def post_gps(
+    body: GPSBody,
+    user_id: str = Depends(user_from_bearer)
+):
+    return api_defs.post_gps(body, user_id, db, parse_timestamp, handle_gps)
 
 
 @app.delete("/me/weight/{day}")
-def delete_weight(day: date, user_id: str = Depends(user_from_bearer)):
-    with db() as conn:
-        conn.execute(
-            "DELETE FROM weight_entries WHERE user_id = %s AND day = %s",
-            (user_id, day),
-        )
-        conn.commit()
-    return {"ok": True, "day": day.isoformat()}
+def delete_weight(
+    day: date,
+    user_id: str = Depends(user_from_bearer)
+):
+    return api_defs.delete_weight(day, user_id, db)
 
 
 @app.get("/me/steps")
@@ -497,32 +529,7 @@ def get_steps(
     from_day: date | None = Query(None, alias="from"),
     to_day: date | None = Query(None, alias="to"),
 ):
-    if from_day and to_day and from_day > to_day:
-        raise HTTPException(422, "from must be on or before to")
-    sql = """
-        SELECT day, steps, goal, updated_at
-        FROM daily_steps
-        WHERE user_id = %s
-    """
-    params: list[Any] = [user_id]
-    if from_day:
-        sql += " AND day >= %s"
-        params.append(from_day)
-    if to_day:
-        sql += " AND day <= %s"
-        params.append(to_day)
-    sql += " ORDER BY day ASC"
-    with db() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [
-        {
-            "date": row[0].isoformat(),
-            "steps": row[1],
-            "goal": row[2],
-            "updated_at": row[3].isoformat() if row[3] else None,
-        }
-        for row in rows
-    ]
+    return api_defs.get_steps(user_id, from_day, to_day, db)
 
 
 @app.get("/me/vitals")
@@ -532,30 +539,7 @@ def get_vitals(
     to_ts: str | None = Query(None, alias="to"),
     limit: int = Query(500, ge=1, le=5000),
 ):
-    start = _parse_rfc3339_query(from_ts)
-    end = _parse_rfc3339_query(to_ts)
-    if start and end and start > end:
-        raise HTTPException(422, "from must be on or before to")
-    sql = """
-        SELECT time, bpm, spo2
-        FROM vitals
-        WHERE user_id = %s
-    """
-    params: list[Any] = [user_id]
-    if start:
-        sql += " AND time >= %s"
-        params.append(start)
-    if end:
-        sql += " AND time <= %s"
-        params.append(end)
-    sql += " ORDER BY time DESC LIMIT %s"
-    params.append(limit)
-    with db() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [
-        {"timestamp": row[0].isoformat(), "bpm": row[1], "spo2": row[2]}
-        for row in rows
-    ]
+    return api_defs.get_vitals(user_id, from_ts, to_ts, limit, db, _parse_rfc3339_timestamp_query)
 
 
 @app.get("/me/gps")
@@ -565,32 +549,4 @@ def get_gps(
     to_ts: str | None = Query(None, alias="to"),
     limit: int = Query(500, ge=1, le=5000),
 ):
-    start = _parse_rfc3339_query(from_ts)
-    end = _parse_rfc3339_query(to_ts)
-    if start and end and start > end:
-        raise HTTPException(422, "from must be on or before to")
-    sql = """
-        SELECT time, lat, lon, accuracy_m
-        FROM gps_points
-        WHERE user_id = %s
-    """
-    params: list[Any] = [user_id]
-    if start:
-        sql += " AND time >= %s"
-        params.append(start)
-    if end:
-        sql += " AND time <= %s"
-        params.append(end)
-    sql += " ORDER BY time DESC LIMIT %s"
-    params.append(limit)
-    with db() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [
-        {
-            "timestamp": row[0].isoformat(),
-            "lat": row[1],
-            "lon": row[2],
-            "accuracy_m": row[3],
-        }
-        for row in rows
-    ]
+    return api_defs.get_gps(user_id, from_ts, to_ts, limit, db, _parse_rfc3339_timestamp_query)

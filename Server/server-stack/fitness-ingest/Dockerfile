@@ -13,6 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+COPY defs ./defs
 RUN chown fitness:fitness /opt/fitness-ingest/app.py
 
 USER fitness
