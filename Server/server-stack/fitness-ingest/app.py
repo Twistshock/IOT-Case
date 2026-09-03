@@ -252,6 +252,7 @@ def parse_auth_body(body: dict[str, Any]) -> tuple[str, str]:
     return username, password
 
 # Creates the device and access tokens for a user.
+# User can't have a profile on first registration.
 def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
     tok = device_token_for(user_id)
     return {
@@ -265,6 +266,50 @@ def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
         "access_token": f"{user_id}.{tok}",
     }
 
+# Creates the device and access tokens for a user.
+def token_gen_login(user_id: str, username: str | None = None) -> dict[str, Any]:
+    tok = device_token_for(user_id)
+    with db() as conn:
+        profile_row = conn.execute(
+            """
+            SELECT display_name, sex, height_cm
+            FROM user_profiles
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        ).fetchone()
+        weight_row = conn.execute("""
+            SELECT day, weight_kg
+            FROM weight_entries
+            WHERE user_id = %s
+            ORDER BY day DESC
+            LIMIT 1
+            """,
+            (user_id,)
+        ).fetchone()
+        data:dict[str, Any] = {
+            "username": username or "",
+            "user_id": user_id,
+        }
+        if profile_row:
+            data["profile"] = {
+                "display_name": profile_row[0],
+                "sex": profile_row[1],
+                "height_cm": profile_row[2],
+            }
+
+        if weight_row:
+            data.setdefault("profile", {})
+            data["profile"]["weight_kg"] = float(weight_row[1])
+            data["profile"]["weight_day"] = weight_row[0].isoformat()
+
+    return {
+        "success": True,
+        "message": "",
+        "data": data,
+        "device_token": tok,
+        "access_token": f"{user_id}.{tok}",
+    }
 
 def register_user(username: str, password: str) -> str:
     """Unknown username → INSERT a new user. Taken username → LookupError."""
@@ -290,7 +335,6 @@ def register_user(username: str, password: str) -> str:
 
 
 def login_user(username: str, password: str) -> str:
-    """Verify Argon2id hash. Never INSERT. Bad credentials → PermissionError."""
     with db() as conn:
         row = conn.execute(
             "SELECT id, password_hash FROM users WHERE username = %s",
@@ -412,7 +456,7 @@ def auth_register(
 def auth_login(
     body: AuthBody
 ):
-    return api_defs.auth_login(body, parse_auth_body, login_user, token_gen)
+    return api_defs.auth_login(body, parse_auth_body, login_user, token_gen_login)
 
 
 @app.get("/me/profile")

@@ -6,7 +6,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
-
+# https://typing.python.org/en/latest/spec/callables.html#callable
 def auth_register(body: Any, parse_auth_body: Callable, register_user: Callable, token_gen: Callable):
     try:
         username, password = parse_auth_body(body.model_dump())
