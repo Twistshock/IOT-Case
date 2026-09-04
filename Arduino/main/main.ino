@@ -4,6 +4,8 @@
 #include "heartRate.h"
 #include "vibration.h"
 #include "ble.h"
+#include "messageHandler.h"
+#include "sdCard.h"
 
 void setup() {
     Serial.begin(115200);
@@ -14,6 +16,7 @@ void setup() {
     HeartRateInit();
     VibrationInit();
     BLEDeviceInit();
+    SdCardSetup();
 
     ACTIVE_SCREEN = HOME_SCREEN;
 
@@ -31,6 +34,13 @@ void setup() {
 void loop() {
   AccelerometeLoop();
   HeartRateLoop();
+
+  // Messages arrive on the BLE task; they are parsed here instead so the
+  // handlers touch Serial, the display and the globals from one task only.
+  String incoming;
+
+  if (BLEReadMessage(incoming))
+      messageHandler(incoming.c_str());
 
   if (ACTIVE_SCREEN == HOME_SCREEN) {
     DisplayHomeScreen(

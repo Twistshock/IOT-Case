@@ -7,8 +7,6 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-#include "messageHandler.h"
-
 #define BLE_DEVICE_NAME "Fitness Tracker V1.0"
 
 #define SERVICE_UUID "12345678-1234-1234-1234-1234567890ab"
@@ -106,8 +104,9 @@ class BLEReceiveCallbacks : public BLECharacteristicCallbacks
 
         bleMessageWaiting = true;
 
-        Serial.print("Received new message..");
-        messageHandler(bleMessageBuffer);
+        // This runs on the BLE stack task, so the message is only parked
+        // here; loop() reads it out and parses it on the main task.
+        Serial.println("Received new message..");
     }
 };
 

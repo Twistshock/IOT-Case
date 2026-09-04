@@ -159,10 +159,11 @@ inline void HeartRateLoop()
     "{\"bpm\":" + String(LAST_HEART_RATE) +
     ",\"spo2\":" + String(LAST_SPO2) +
     ",\"temp\":" + String(LAST_SENSOR_TEMPERATURE, 1) +
+    ",\"type\":\"bpm\""
     "}";
 
     Serial.print(message);
-    BLESendMessage(message.c_str());
+    BLESendMessage(message);
 }
 
 inline bool IsFingerDetected()

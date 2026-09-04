@@ -58,7 +58,13 @@ inline void DisplayHomeScreen(
     // Header
     oled.setFont(u8g2_font_6x12_tr);
     char header[40];
-    snprintf(header, sizeof(header), "FITNESS %s", TIMETAMP.c_str());
+    snprintf(
+        header,
+        sizeof(header),
+        "%s | %s",
+        USERNAME.c_str(),
+        TIMESTAMP.c_str()
+    );
     oled.drawStr(0, 10, header);
 
     // Divider under the header
