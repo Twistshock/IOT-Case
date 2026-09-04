@@ -49,6 +49,7 @@ inline void BLESendMessage(const String &message)
 
     bleTxCharacteristic->setValue(message.c_str());
     bleTxCharacteristic->notify();
+
 }
 
 // Read the message the phone sent, if there is one.

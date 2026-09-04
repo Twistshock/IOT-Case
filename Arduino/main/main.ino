@@ -6,6 +6,7 @@
 #include "ble.h"
 #include "messageHandler.h"
 #include "sdCard.h"
+#include "multiTask.h"
 
 void setup() {
     Serial.begin(115200);
@@ -16,6 +17,7 @@ void setup() {
     HeartRateInit();
     VibrationInit();
     BLEDeviceInit();
+    MultitaskInit();
     SdCardSetup();
 
     ACTIVE_SCREEN = HOME_SCREEN;

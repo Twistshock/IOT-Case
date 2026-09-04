@@ -7,6 +7,7 @@
 #include "config.h"
 #include "heartRate.h"
 #include "ble.h"
+#include "sdCard.h"
 
 // The message types the phone can send in the "type" field
 enum MessageType
@@ -54,6 +55,9 @@ inline void HandleaSyncDevice(JsonDocument &doc)
       // would leave TIMESTAMP dangling as soon as doc goes out of scope.
       TIMESTAMP = date;
       USERNAME = username;
+
+      saveUserData(username, date);
+      
   }
 
   Serial.printf(
