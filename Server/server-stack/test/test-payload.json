@@ -1,0 +1,8 @@
+{
+  "device_id": "test-01",
+  "gateway_id": "bp-test",
+  "timestamp": "2026-08-10T20:00:00Z",
+  "temperature_c": 21.5,
+  "humidity_pct": 48.0,
+  "pressure_hpa": 1012.3
+}
