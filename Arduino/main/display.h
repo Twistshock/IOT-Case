@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <U8g2lib.h> // installed U8g2
+#include "config.h"
 
 #define OLED_SDA 21
 #define OLED_SCK 22
@@ -56,7 +57,15 @@ inline void DisplayHomeScreen(
 
     // Header
     oled.setFont(u8g2_font_6x12_tr);
-    oled.drawStr(0, 10, "FITNESS 31-8-26");
+    char header[40];
+    snprintf(
+        header,
+        sizeof(header),
+        "%s | %s",
+        USERNAME.c_str(),
+        TIMESTAMP.c_str()
+    );
+    oled.drawStr(0, 10, header);
 
     // Divider under the header
     oled.drawHLine(0, 13, 128);
@@ -229,7 +238,7 @@ inline void DisplayLoadingScreen(const char *text)
 
     // Title
     oled.setFont(u8g2_font_6x12_tr);
-    oled.drawStr(16, 12, "FITNESS 31-8-26");
+    oled.drawStr(16, 12, "FITNESS");
 
     // Divider
     oled.drawHLine(0, 15, 128);

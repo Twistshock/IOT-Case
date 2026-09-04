@@ -17,8 +17,9 @@
 // Tracker -> phone (the app subscribes here)
 #define CHARACTERISTIC_TX_UUID "abcdefab-1234-1234-1234-abcdefabcdf0"
 
-// Incoming commands from the phone are short
-constexpr size_t BLE_MESSAGE_SIZE = 64;
+// Incoming commands from the phone. The negotiated MTU of 185 leaves 182
+// bytes for the payload, so the buffer holds a whole write plus its NUL.
+constexpr size_t BLE_MESSAGE_SIZE = 192;
 
 // A stats payload carries every sensor value, so it needs more room
 constexpr size_t BLE_PAYLOAD_SIZE = 128;
@@ -83,18 +84,29 @@ class BLEReceiveCallbacks : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *characteristic)
     {
-        const char *data = characteristic->getValue().c_str();
+        // getValue() returns by value, so the String has to stay alive while
+        // it is copied - c_str() on the temporary would dangle immediately.
+        String data = characteristic->getValue();
 
-        if (data == nullptr || data[0] == '\0')
+        if (data.isEmpty())
             return;
 
-        strncpy(bleMessageBuffer, data, BLE_MESSAGE_SIZE - 1);
+        // Truncating here would hand messageHandler() half a JSON object,
+        // so an oversized write is reported instead of parsed.
+        if (data.length() >= BLE_MESSAGE_SIZE)
+        {
+            Serial.printf("BLE message too long (%u bytes), dropped\n", data.length());
+            return;
+        }
+
+        strncpy(bleMessageBuffer, data.c_str(), BLE_MESSAGE_SIZE - 1);
         bleMessageBuffer[BLE_MESSAGE_SIZE - 1] = '\0';
 
         bleMessageWaiting = true;
 
-        Serial.print("Received: ");
-        Serial.println(bleMessageBuffer);
+        // This runs on the BLE stack task, so the message is only parked
+        // here; loop() reads it out and parses it on the main task.
+        Serial.println("Received new message..");
     }
 };
 

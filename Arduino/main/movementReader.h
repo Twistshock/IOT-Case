@@ -3,11 +3,9 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include "config.h"
+#include "ble.h"
 
-
-// Public fitness values
-uint32_t STEPS = 0;
-float BURNED_KCAL = 0.0f;
 
 // Step-detection state
 unsigned long lastStepTime = 0;
@@ -121,6 +119,12 @@ void detectStep(int16_t x, int16_t y, int16_t z)
         Serial.println(walking ? 1 : 0);
         Serial.print(" | Walking: ");
         Serial.println(walking ? 1 : 0);
+
+        String message = "{\"steps\":" + String(STEPS) + 
+        ",\"kcal\":" + String(BURNED_KCAL) +
+        ",\"type\":\"steps\""
+        "}";
+        BLESendMessage(message);
 
     }
 }
