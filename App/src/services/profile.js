@@ -30,12 +30,12 @@ export const SEX_OPTIONS = ['female', 'male', 'other'];
 /** Picks the profile fields out of whatever the user object happens to hold. */
 export function toProfile(user) {
   return {
-    displayname: user?.displayname ?? user?.name ?? '',
-    sex: user?.sex ?? '',
+    displayname: user?.profile?.displayname ?? user?.username ?? '',
+    sex: user?.profile?.sex ?? '',
     height_cm:
-      typeof user?.height_cm === 'number' ? user.height_cm : null,
+      typeof user?.profile?.height_cm === 'number' ? user.profile.height_cm : null,
     weight_kg:
-      typeof user?.weight_kg === 'number' ? user.weight_kg : null,
+      typeof user?.profile?.weight_kg === 'number' ? user.profile.weight_kg : null,
   };
 }
 

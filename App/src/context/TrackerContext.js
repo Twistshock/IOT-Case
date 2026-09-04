@@ -21,7 +21,7 @@ export function TrackerProvider({ children }) {
       try{
         if (!isConnected) return;
         const parsed = parseTrackerStats(text);
-        if(parsed && parsed.type === 'save_steps_to_db') {
+        if(parsed && parsed.type === 'tracker_data') {
           console.log('Received save_steps_to_db message from tracker:', parsed);
         }
       }
