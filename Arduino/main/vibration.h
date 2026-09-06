@@ -12,10 +12,7 @@ Haptic_Driver haptic;
 
 void VibrationInit()
 {
-
-    Wire.begin(I2C_SDA, I2C_SCL);
-    Wire.setClock(100000);
-
+    // Code removed, avoid starting the same wire(SDA, SCL) multiple times.
     Serial.println("Starting DA7280...");
 
     if (!haptic.begin(Wire))
@@ -23,8 +20,8 @@ void VibrationInit()
         Serial.println("DA7280 not found!");
         Serial.println("Check address 0x4A and wiring.");
 
-        while (true)
-            delay(100);
+        // Continue boot without haptics for now, it's not a must-have in our definition.
+        return;
     }
 
     Serial.println("DA7280 found!");

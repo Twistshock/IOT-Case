@@ -19,7 +19,9 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(
 inline void DisplayInit()
 {
     Wire.begin(OLED_SDA, OLED_SCK);
-    Wire.setClock(400000);
+    // Attempt standard 100 kHz i2C, see if it works. We can always try 400 kHz again if it does not.
+    // Should reduce power draw.
+    Wire.setClock(100000);
 
     oled.begin();
     oled.clearBuffer();
