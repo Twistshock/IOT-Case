@@ -89,8 +89,11 @@ bool readUserData(
     Serial.print("Timestamp: ");
     Serial.println(timestamp);
 
-    TIMESTAMP = timestamp;
     USERNAME = username;
+
+    // The stored timestamp is when the phone last synced, not now. The device
+    // was off in between and cannot tell for how long, so TIMESTAMP is left
+    // unknown until the phone reconnects and starts the clock again.
 
     return true;
 }
@@ -221,7 +224,7 @@ void createFilesIfMissing()
         Serial.println("Creating tracker.json...");
 
         saveTrackerData(
-            "--/--/--",   // Timestamp
+            "",   // Timestamp: empty means not known yet
             0,    // Steps
             0.0,  // Kcal
             0,    // Heart rate

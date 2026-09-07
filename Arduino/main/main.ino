@@ -7,10 +7,14 @@
 #include "messageHandler.h"
 #include "sdCard.h"
 #include "multiTask.h"
+#include "timeSync.h"
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
+
+    // Has to run before anything formats or stores a time
+    TimeSyncInit();
 
     DisplayInit();
     AccelerometeInit();

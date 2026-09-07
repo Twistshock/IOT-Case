@@ -2,6 +2,7 @@
 #define CONFIG_H
 
 #include <Arduino.h>
+#include "timeSync.h"
 
 enum ScreenId
 {
@@ -12,7 +13,7 @@ enum ScreenId
 
 // Last sync time the phone sent. A String so it owns a copy of the text:
 // the const char* from a JsonDocument dies with the document.
-inline String TIMESTAMP = "--/--/--";
+inline String TIMESTAMP = GetDateTime();
 inline String USERNAME = "there..";
 
 // Step count and the calories derived from it. Written by movementReader,

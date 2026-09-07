@@ -6,12 +6,20 @@
 #include "config.h"
 #include "heartRate.h"
 #include "ble.h"
+#include "timeSync.h"
 
 
 
 void SaveTrackerData(){
+  // Keep the displayed date in step with the clock, so it rolls over at
+  // midnight instead of showing the date of the last phone connect.
+  TIMESTAMP = GetDate();
+
+  // Each record gets the moment it was actually taken. Before the phone has
+  // synced this is empty rather than a guess - the device cannot know how
+  // long it was powered off, so an unstamped record is the honest answer.
   saveTrackerData(
-    TIMESTAMP,
+    GetTimestamp(),
     STEPS,
     BURNED_KCAL,
     HEART_RATE,

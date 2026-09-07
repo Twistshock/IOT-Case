@@ -8,6 +8,7 @@
 #include "heartRate.h"
 #include "ble.h"
 #include "sdCard.h"
+#include "timeSync.h"
 
 // The message types the phone can send in the "type" field
 enum MessageType
@@ -30,40 +31,43 @@ inline MessageType ParseMessageType(const char *dataType)
   return MESSAGE_UNKNOWN;
 }
 
-// The phone asked us to sync; pick the account out of the payload
+// The phone asked us to sync. It brings the only clock the tracker has, so
+// this is where time starts running again after a power loss.
 inline void HandleaSyncDevice(JsonDocument &doc)
 {
   const char *username = doc["username"] | "";
 
-  const char *timestamp = doc["timestamp"] | "";
+  // Unix epoch in seconds, UTC
+  time_t epoch = doc["epoch"] | 0;
 
-  // "2026-09-02T10:20:28.324Z" -> "02/09/2026", dropping the time.
-  // %.Ns copies exactly N characters, so each piece can be read straight
-  // out of the middle of the ISO string without cutting it up first.
-  if (strlen(timestamp) >= 10)
+  // Assigning to a String copies the text. Keeping the const char* would
+  // leave USERNAME dangling as soon as doc goes out of scope.
+  USERNAME = username;
+
+  if (SaveTime(epoch))
   {
-      char date[11];
+      // Read back from the clock instead of the payload, so the date keeps
+      // up on its own instead of freezing at the moment of the last connect.
+      TIMESTAMP = GetDateTime();
 
-      snprintf(
-          date, sizeof(date), "%.2s/%.2s/%.4s",
-          timestamp + 8,  // day
-          timestamp + 5,  // month
-          timestamp       // year
+      saveUserData(username, GetTimestamp());
+
+      Serial.printf(
+          "sync data with username: %s at %s\n",
+          username,
+          GetTimestamp().c_str()
       );
 
-      // Assigning to a String copies the text. Keeping the const char*
-      // would leave TIMESTAMP dangling as soon as doc goes out of scope.
-      TIMESTAMP = date;
-      USERNAME = username;
-
-      saveUserData(username, date);
-      
+      return;
   }
+  
+  // No usable time. Keep the username anyway - it used to be dropped along
+  // with the timestamp, which lost the account for no reason.
+  saveUserData(username, GetTimestamp());
 
   Serial.printf(
-      "sync data with username: %s on %s\n",
-      username,
-      TIMESTAMP.c_str()
+      "sync data with username: %s, but no usable time was sent\n",
+      username
   );
 }
 
