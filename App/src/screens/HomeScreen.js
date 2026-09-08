@@ -73,6 +73,7 @@ export default function HomeScreen() {
   // comes back through the handler above, not from getSteps itself.
   useEffect(() => {
     if (!isConnected) {
+      console.log('Not connected to tracker, fetching data from database instead.');
       return;
     }
     getStepsFromESP32(send).catch((e) => console.warn(e.message));

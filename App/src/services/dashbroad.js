@@ -1,21 +1,5 @@
-import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-import { API_BASE_URL, STORAGE_KEYS, DASHBOARD_ENDPOINTS } from '../constants/api';
-
-// Dashboard calls are all authenticated, so this client attaches the token that
-// login stored under STORAGE_KEYS.token.
-const apiClient = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
-});
-
-apiClient.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem(STORAGE_KEYS.token);
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+import { DASHBOARD_ENDPOINTS } from '../constants/api';
+import { apiClient } from './httpClient';
 
 /** Turns whatever axios threw into one sentence we can show the user. */
 function readableError(error, fallback) {
@@ -175,4 +159,16 @@ const getStepsFromESP32 = async (send) => {
   }
 };
 
-export { SaveBpm, SaveSteps, getStepsFromESP32, fetchStepsDB };
+
+const fetchMeasurementsDB = async (payload) => {
+  try{
+    const { data } = await apiClient.post(DASHBOARD_ENDPOINTS.measurements, payload);
+    return data;
+  }
+  catch(error){
+    console.error('Error fetching measurements from DB:', error);
+    throw new Error(readableError(error, 'Could not fetch your measurements.'));
+  }
+}
+
+export { SaveBpm, SaveSteps, getStepsFromESP32, fetchStepsDB, fetchMeasurementsDB };
