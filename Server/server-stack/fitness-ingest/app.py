@@ -10,20 +10,26 @@ import os
 import re
 import hashlib # hashing functions
 import threading
-from defs import api_defs
-from contextlib import asynccontextmanager  # for creating async context managers for resource setup/cleanup
-from datetime import date, datetime, timezone
-from typing import Any, Literal
-from uuid import UUID
-
+import secrets
 import paho.mqtt.client as mqtt
 import psycopg
+
+from defs import api_defs
+from contextlib import asynccontextmanager  # for creating async context managers for resource setup/cleanup
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Literal
+from uuid import UUID
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates # Web template engine
 from pydantic import BaseModel, Field
+
 # os.environ gets environment variables.
 MQTT_HOST = os.environ["MQTT_HOST"]
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
@@ -45,6 +51,8 @@ if len(TOKEN_SECRET) != 32:
 MQTT_FILTER = "users/+/fitness/#"
 security = HTTPBearer()
 
+
+
 # psychopg allows python to connect to a python database.
 # https://www.psycopg.org/psycopg3/docs/api/connections.html
 # Python note: -> = return type annotation
@@ -57,6 +65,49 @@ def db() -> psycopg.Connection:
         user=FITNESS_DB_USER,
         password=FITNESS_DB_PASSWORD,
     )
+
+def create_session(user_id: str) -> str:
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode("utf-8")).digest()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_sessions (token_hash, user_id, expires_at)
+            VALUES (%s, %s, %s)
+            """,
+            (token_hash, user_id, expires_at),
+        )
+        conn.commit()
+    return raw
+
+
+def user_from_session_token(raw: str) -> str:
+    token_hash = hashlib.sha256(raw.encode("utf-8")).digest()
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT user_id
+            FROM user_sessions
+            WHERE token_hash = %s AND expires_at > now()
+            """,
+            (token_hash,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(401, "invalid or expired access token")
+    return str(row[0])
+
+
+def revoke_session(raw: str) -> None:
+    token_hash = hashlib.sha256(raw.encode("utf-8")).digest()
+    with db() as conn:
+        conn.execute(
+            "DELETE FROM user_sessions WHERE token_hash = %s",
+            (token_hash,),
+        )
+        conn.commit()
+
 
 # Creates a secure device token for the given user ID.
 def device_token_for(user_id: str) -> str:
@@ -263,7 +314,7 @@ def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
             "user_id": user_id,
         },
         "device_token": tok,
-        "access_token": f"{user_id}.{tok}",
+        "access_token": create_session(user_id),
     }
 
 # Creates the device and access tokens for a user.
@@ -308,7 +359,7 @@ def token_gen_login(user_id: str, username: str | None = None) -> dict[str, Any]
         "message": "",
         "data": data,
         "device_token": tok,
-        "access_token": f"{user_id}.{tok}",
+        "access_token": create_session(user_id),
     }
 
 def register_user(username: str, password: str) -> str:
@@ -353,18 +404,11 @@ def login_user(username: str, password: str) -> str:
 
 
 # https://fastapi.tiangolo.com/reference/security/#fastapi.security.HTTPBearer
-def user_from_bearer(creds: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    raw = creds.credentials
-    if not isinstance(raw, str) or "." not in raw:
-        raise HTTPException(401, "invalid access_token")
-    try:
-        user_id, token = raw.split(".", 1)
-        UUID(user_id)
-    except ValueError:
-        raise HTTPException(401, "invalid access_token")
-    if not hmac.compare_digest(token, device_token_for(user_id)):
-        raise HTTPException(401, "invalid access_token")
-    return user_id
+def user_from_bearer(
+    creds: HTTPAuthorizationCredentials = Depends(security),
+) -> str:
+    return user_from_session_token(creds.credentials)
+
 
 
 class AuthBody(BaseModel):
@@ -401,6 +445,23 @@ class GPSBody(BaseModel):
     lon: float = Field(ge=-180, le=180)
     accuracy_m: float = Field(ge=0, default=0.0)
 
+# For batch ingestion of data.
+class MeasurementBody(BaseModel):
+    tracker_id: str = Field(pattern=r"^[0-9a-f]{12,32}$")
+    sequence: int = Field(ge=0)
+    captured_at: datetime
+    timestamp_estimated: bool = False
+    step_delta: int = Field(default=0, ge=0)
+    steps: int = Field(ge=0)
+    bpm: int | None = Field(default=None, ge=20, le=250)
+    spo2: int | None = Field(default=None, ge=0, le=100)
+    temperature_c: float | None = Field(default=None, ge=-20, le=80)
+
+# Ingests a list of MeasurementBody
+class MeasurementBatchBody(BaseModel):
+    measurements: list[MeasurementBody] = Field(min_length=1, max_length=500)
+
+
 
 def _parse_rfc3339_timestamp_query(value: str | None) -> datetime | None: # RFC3339 is a standard timestamp format
     if value is None:
@@ -427,6 +488,9 @@ app = FastAPI(
     description="Per-user fitness API. Authorize with access_token from POST /auth/register or POST /auth/login.",
     lifespan=lifespan,
 )
+# Defines the directories for our   
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # CORS (Cross-Origin Resource Sharing) middleware allows this API to accept requests from browsers
 # running on different domains. allow_origins=["*"] permits requests from any origin (tighten up after development).
@@ -440,6 +504,10 @@ app.add_middleware(
 
 # Swaggy endpoints (note: swaggy is a joke on swagger, and not a separate thing)
 # The @ symbol (decorator) tells FastAPI to create an HTTP GET route at /health that calls health()
+## If we add an endpoint, please run these commands:
+## podman compose build fitness-ingest
+## podman rm -f iot-fitness-ingest
+## podman-compose up -d fitness-ingest
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -506,6 +574,189 @@ def post_vitals(
 ):
     return api_defs.post_vitals(body, user_id, db, parse_timestamp, handle_vitals)
 
+# For batch ingestion
+@app.post("/me/measurements/batch")
+def post_measurement_batch(
+    body: MeasurementBatchBody,
+    user_id: str = Depends(user_from_bearer),
+):
+    tracker_ids = sorted({item.tracker_id for item in body.measurements})
+    if len(tracker_ids) != 1:
+        raise HTTPException(422, "one batch must contain exactly one tracker")
+
+    with db() as conn:
+        # A tracker is not permanently assigned to an account. However, an
+        # existing measurement that was already stored cannot change owners.
+        for item in body.measurements:
+            existing = conn.execute(
+                """
+                SELECT user_id
+                FROM vitals
+                WHERE tracker_id = %s AND sequence = %s
+                """,
+                (item.tracker_id, item.sequence),
+            ).fetchone()
+            if existing and str(existing[0]) != user_id:
+                raise HTTPException(
+                    409,
+                    "measurement was already uploaded by another account",
+                )
+
+        for item in body.measurements:
+            captured_at = item.captured_at
+            if captured_at.tzinfo is None:
+                captured_at = captured_at.replace(tzinfo=timezone.utc)
+            captured_at = captured_at.astimezone(timezone.utc)
+
+            conn.execute(
+                """
+                INSERT INTO vitals (
+                    tracker_id, sequence, user_id, time,
+                    timestamp_estimated, step_delta, steps,
+                    bpm, spo2, temperature_c
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tracker_id, sequence)
+                    WHERE tracker_id IS NOT NULL AND sequence IS NOT NULL
+                DO NOTHING
+                """,
+                (
+                    item.tracker_id,
+                    item.sequence,
+                    user_id,
+                    captured_at,
+                    item.timestamp_estimated,
+                    item.step_delta,
+                    item.steps,
+                    item.bpm,
+                    item.spo2,
+                    item.temperature_c,
+                ),
+            )
+
+        confirmed = []
+        for item in body.measurements:
+            row = conn.execute(
+                """
+                SELECT user_id
+                FROM vitals
+                WHERE tracker_id = %s AND sequence = %s
+                """,
+                (item.tracker_id, item.sequence),
+            ).fetchone()
+            if row:
+                if str(row[0]) != user_id:
+                    raise HTTPException(
+                        409,
+                        "measurement was concurrently uploaded by another account",
+                    )
+                confirmed.append(
+                    {
+                        "tracker_id": item.tracker_id,
+                        "sequence": item.sequence,
+                    }
+                )
+
+        conn.commit()
+
+    return {"ok": True, "confirmed": confirmed}
+
+# Returns the authenticated user's measurements within an optional time range.
+@app.get("/me/measurements")
+def get_measurements(
+    user_id: str = Depends(user_from_bearer),
+    from_ts: str | None = Query(None, alias="from"),
+    to_ts: str | None = Query(None, alias="to"),
+    limit: int = Query(1000, ge=1, le=5000),
+):
+    end = _parse_rfc3339_timestamp_query(to_ts) or datetime.now(timezone.utc)
+    start = _parse_rfc3339_timestamp_query(from_ts)
+    if start is None:
+        start = end.replace(microsecond=0) - timedelta(days=1)
+    if start > end:
+        raise HTTPException(422, "from must be on or before to")
+
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT tracker_id, sequence, time, timestamp_estimated,
+                   step_delta, steps, bpm, spo2, temperature_c
+            FROM vitals
+            WHERE user_id = %s
+              AND time >= %s
+              AND time <= %s
+              AND tracker_id IS NOT NULL
+              AND sequence IS NOT NULL
+            ORDER BY time DESC
+            LIMIT %s
+            """,
+            (user_id, start, end, limit),
+        ).fetchall()
+
+    return [
+        {
+            "tracker_id": row[0],
+            "sequence": row[1],
+            "captured_at": row[2].isoformat(),
+            "timestamp_estimated": row[3],
+            "step_delta": row[4],
+            "steps": row[5],
+            "bpm": row[6],
+            "spo2": row[7],
+            "temperature_c": float(row[8]) if row[8] is not None else None,
+        }
+        for row in rows
+    ]
+
+
+# Returns step, heart-rate, oxygen, and sample-count totals for a time range.
+@app.get("/me/summary")
+def get_summary(
+    user_id: str = Depends(user_from_bearer),
+    from_ts: str | None = Query(None, alias="from"),
+    to_ts: str | None = Query(None, alias="to"),
+):
+    end = _parse_rfc3339_timestamp_query(to_ts) or datetime.now(timezone.utc)
+    start = _parse_rfc3339_timestamp_query(from_ts)
+    if start is None:
+        start = end.replace(microsecond=0) - timedelta(days=1)
+    if start > end:
+        raise HTTPException(422, "from must be on or before to")
+
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(step_delta), 0),
+                   MIN(bpm), AVG(bpm), MAX(bpm),
+                   MIN(spo2), AVG(spo2), MAX(spo2),
+                   COUNT(*)
+            FROM vitals
+            WHERE user_id = %s
+              AND time >= %s
+              AND time <= %s
+              AND tracker_id IS NOT NULL
+              AND sequence IS NOT NULL
+            """,
+            (user_id, start, end),
+        ).fetchone()
+
+    return {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "steps": int(row[0]),
+        "bpm": {
+            "min": row[1],
+            "avg": float(row[2]) if row[2] is not None else None,
+            "max": row[3],
+        },
+        "spo2": {
+            "min": row[4],
+            "avg": float(row[5]) if row[5] is not None else None,
+            "max": row[6],
+        },
+        "sample_count": row[7],
+    }
+
 
 @app.post("/me/gps")
 def post_gps(
@@ -550,3 +801,54 @@ def get_gps(
     limit: int = Query(500, ge=1, le=5000),
 ):
     return api_defs.get_gps(user_id, from_ts, to_ts, limit, db, _parse_rfc3339_timestamp_query)
+
+
+#Web routes
+
+@app.get("/web/login", response_class=HTMLResponse)
+def web_login_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"error": None},
+    )
+
+
+@app.post("/web/login")
+def web_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    try:
+        user_id = login_user(clean_username(username), password)
+    except PermissionError:
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"error": "Invalid username or password"},
+            status_code=401,
+        )
+
+    session = create_session(user_id)
+    response = RedirectResponse("/web/dashboard", status_code=303)
+    response.set_cookie(
+        "session",
+        session,
+        httponly=True,
+        secure=os.environ.get("COOKIE_SECURE", "false").lower() == "true",
+        samesite="lax",
+        max_age=30 * 24 * 60 * 60,
+    )
+    return response
+
+
+@app.post("/web/logout")
+def web_logout(request: Request):
+    session = request.cookies.get("session")
+    if session:
+        revoke_session(session)
+
+    response = RedirectResponse("/web/login", status_code=303)
+    response.delete_cookie("session")
+    return response
