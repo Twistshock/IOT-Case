@@ -51,6 +51,12 @@ if len(TOKEN_SECRET) != 32:
 MQTT_FILTER = "users/+/fitness/#"
 security = HTTPBearer()
 
+# Access tokens are short-lived; refresh tokens last two weeks and are not extended on use.
+ACCESS_TOKEN_TTL = timedelta(minutes=15)
+REFRESH_TOKEN_TTL = timedelta(weeks=2)
+ACCESS_TOKEN_MAX_AGE = int(ACCESS_TOKEN_TTL.total_seconds())
+REFRESH_TOKEN_MAX_AGE = int(REFRESH_TOKEN_TTL.total_seconds())
+
 
 
 # psychopg allows python to connect to a python database.
@@ -66,47 +72,121 @@ def db() -> psycopg.Connection:
         password=FITNESS_DB_PASSWORD,
     )
 
-def create_session(user_id: str) -> str:
-    raw = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(raw.encode("utf-8")).digest()
-    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+def _token_hash(raw: str) -> bytes:
+    return hashlib.sha256(raw.encode("utf-8")).digest()
 
+
+def _normalize_token(raw: str) -> str:
+    # Removes quotes, and trailing whitespace.
+    token = raw.strip().strip('"').strip("'")
+    return token
+
+
+def _store_opaque_token(table: str, user_id: str, ttl: timedelta) -> str:
+    # table is a hardcoded name (user_sessions / refresh_tokens), never user input.
+    # an opaque token is an unreadable string of characters that act as a reference.
+    raw = secrets.token_urlsafe(32)
     with db() as conn:
         conn.execute(
-            """
-            INSERT INTO user_sessions (token_hash, user_id, expires_at)
-            VALUES (%s, %s, %s)
-            """,
-            (token_hash, user_id, expires_at),
+            f"INSERT INTO {table} (token_hash, user_id, expires_at) VALUES (%s, %s, %s)",
+            (_token_hash(raw), user_id, datetime.now(timezone.utc) + ttl),
         )
         conn.commit()
     return raw
 
 
-def user_from_session_token(raw: str) -> str:
-    token_hash = hashlib.sha256(raw.encode("utf-8")).digest()
+def create_access_token(user_id: str) -> str:
+    return _store_opaque_token("user_sessions", user_id, ACCESS_TOKEN_TTL)
+
+
+def create_refresh_token(user_id: str) -> str:
+    return _store_opaque_token("refresh_tokens", user_id, REFRESH_TOKEN_TTL)
+
+
+def issue_tokens(user_id: str) -> tuple[str, str]:
+    """New access + refresh pair. Does not revoke other logins (app and web can coexist)."""
+    return create_access_token(user_id), create_refresh_token(user_id)
+
+
+def _user_from_token(raw: str, table: str, error: str) -> str:
+    raw = _normalize_token(raw)
     with db() as conn:
         row = conn.execute(
-            """
-            SELECT user_id
-            FROM user_sessions
-            WHERE token_hash = %s AND expires_at > now()
-            """,
-            (token_hash,),
+            f"SELECT user_id FROM {table} WHERE token_hash = %s AND expires_at > now()",
+            (_token_hash(raw),),
         ).fetchone()
     if not row:
-        raise HTTPException(401, "invalid or expired access token")
+        raise HTTPException(401, error)
     return str(row[0])
+
+# Checks if the tokenuser_from_session_token is valid and returns the user ID.
+def user_from_session_token(raw: str) -> str:
+    raw = _normalize_token(raw)
+    try:
+        return _user_from_token(raw, "user_sessions", "invalid or expired token")
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        try:
+            _user_from_token(raw, "refresh_tokens", "invalid or expired token")
+        except HTTPException:
+            raise exc
+        raise HTTPException(
+            401,
+            "You may have submitted the wrong kind of token. Please try again.",
+        )
+
+
+def user_from_refresh_token(raw: str) -> str:
+    return _user_from_token(raw, "refresh_tokens", "invalid or expired refresh token")
+
+
+def _revoke_token(raw: str, table: str) -> None:
+    raw = _normalize_token(raw)
+    with db() as conn:
+        conn.execute(
+            f"DELETE FROM {table} WHERE token_hash = %s",
+            (_token_hash(raw),),
+        )
+        conn.commit()
 
 
 def revoke_session(raw: str) -> None:
-    token_hash = hashlib.sha256(raw.encode("utf-8")).digest()
-    with db() as conn:
-        conn.execute(
-            "DELETE FROM user_sessions WHERE token_hash = %s",
-            (token_hash,),
-        )
-        conn.commit()
+    _revoke_token(raw, "user_sessions")
+
+
+def revoke_refresh(raw: str) -> None:
+    _revoke_token(raw, "refresh_tokens")
+
+# The **kwargs parameter allows a function to accept any number of keyword arguments.
+# https://www.w3schools.com/python/python_args_kwargs.asp
+def _auth_cookie_kwargs(max_age: int) -> dict[str, Any]:
+    return {
+        "httponly": True,
+        "secure": os.environ.get("COOKIE_SECURE", "false").lower() == "true",
+        "samesite": "lax",
+        "max_age": max_age,
+    }
+
+
+def user_from_web_request(request: Request) -> tuple[str | None, str | None]:
+    # Returns (user_id, new_access_token). new_access_token is set when the 15-minute 
+    # session cookie has expired but the 14-day refresh cookie is still valid.
+    raw_access = request.cookies.get("session")
+    if raw_access:
+        try:
+            return user_from_session_token(raw_access), None
+        except HTTPException:
+            pass
+
+    raw_refresh = request.cookies.get("refresh")
+    if raw_refresh:
+        try:
+            user_id = user_from_refresh_token(raw_refresh)
+            return user_id, create_access_token(user_id)
+        except HTTPException:
+            pass
+    return None, None
 
 
 # Creates a secure device token for the given user ID.
@@ -302,10 +382,11 @@ def parse_auth_body(body: dict[str, Any]) -> tuple[str, str]:
         raise ValueError("your password must be at least 8 characters long")
     return username, password
 
-# Creates the device and access tokens for a user.
+# Creates the device, access, and refresh tokens for a user.
 # User can't have a profile on first registration.
 def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
     tok = device_token_for(user_id)
+    access, refresh = issue_tokens(user_id)
     return {
         "success": True,
         "message": "",
@@ -314,12 +395,14 @@ def token_gen(user_id: str, username: str | None = None) -> dict[str, Any]:
             "user_id": user_id,
         },
         "device_token": tok,
-        "access_token": create_session(user_id),
+        "access_token": access,
+        "refresh_token": refresh,
     }
 
-# Creates the device and access tokens for a user.
+# Creates the device, access, and refresh tokens for a user.
 def token_gen_login(user_id: str, username: str | None = None) -> dict[str, Any]:
     tok = device_token_for(user_id)
+    access, refresh = issue_tokens(user_id)
     with db() as conn:
         profile_row = conn.execute(
             """
@@ -359,7 +442,8 @@ def token_gen_login(user_id: str, username: str | None = None) -> dict[str, Any]
         "message": "",
         "data": data,
         "device_token": tok,
-        "access_token": create_session(user_id),
+        "access_token": access,
+        "refresh_token": refresh,
     }
 
 def register_user(username: str, password: str) -> str:
@@ -414,6 +498,10 @@ def user_from_bearer(
 class AuthBody(BaseModel):
     username: str
     password: str
+
+
+class RefreshBody(BaseModel):
+    refresh_token: str
 
 
 class ProfileBody(BaseModel):
@@ -485,7 +573,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Fitness ingest",
     version="0.1.0",
-    description="Per-user fitness API. Authorize with access_token from POST /auth/register or POST /auth/login.",
+    description="Per-user fitness API. Authorize with access_token from POST /auth/register, POST /auth/login, or POST /auth/refresh.",
     lifespan=lifespan,
 )
 # Defines the directories for our   
@@ -525,6 +613,15 @@ def auth_login(
     body: AuthBody
 ):
     return api_defs.auth_login(body, parse_auth_body, login_user, token_gen_login)
+
+
+@app.post("/auth/refresh")
+def auth_refresh(
+    body: RefreshBody
+):
+    return api_defs.auth_refresh(
+        body, user_from_refresh_token, create_access_token, ACCESS_TOKEN_MAX_AGE
+    )
 
 
 @app.get("/me/profile")
@@ -813,6 +910,70 @@ def web_login_page(request: Request):
         context={"error": None},
     )
 
+DASHBOARD_RANGES = {
+    "hour": timedelta(hours=1),
+    "day": timedelta(days=1),
+    "2days": timedelta(days=2),
+    "week": timedelta(days=7),
+}
+
+
+@app.get("/web/dashboard", response_class=HTMLResponse)
+def web_dashboard_page(
+    request: Request,
+    range_name: str = Query("day", alias="range"),
+):
+    user_id, new_access = user_from_web_request(request)
+    if user_id is None:
+        return RedirectResponse("/web/login", status_code=303)
+
+    if range_name not in DASHBOARD_RANGES:
+        range_name = "day"
+
+    end = datetime.now(timezone.utc)
+    start = end - DASHBOARD_RANGES[range_name]
+
+    with db() as conn:
+        user_row = conn.execute(
+            "SELECT username FROM users WHERE id = %s",
+            (user_id,),
+        ).fetchone()
+        rows = conn.execute(
+            """
+            SELECT time, steps, bpm, spo2, temperature_c
+            FROM vitals
+            WHERE user_id = %s
+              AND time >= %s
+              AND time <= %s
+            ORDER BY time ASC
+            LIMIT 5000
+            """,
+            (user_id, start, end),
+        ).fetchall()
+
+    points = [
+        {
+            "t": row[0].isoformat(),
+            "steps": row[1],
+            "bpm": row[2],
+            "spo2": row[3],
+            "temperature_c": float(row[4]) if row[4] is not None else None,
+        }
+        for row in rows
+    ]
+
+    response = templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "username": user_row[0] if user_row else "",
+            "range_name": range_name,
+            "points_json": json.dumps(points).replace("<", "\\u003c"), # u003c = less than, <
+        },
+    )
+    if new_access:
+        response.set_cookie("session", new_access, **_auth_cookie_kwargs(ACCESS_TOKEN_MAX_AGE))
+    return response
 
 @app.post("/web/login")
 def web_login(
@@ -830,16 +991,10 @@ def web_login(
             status_code=401,
         )
 
-    session = create_session(user_id)
+    access, refresh = issue_tokens(user_id)
     response = RedirectResponse("/web/dashboard", status_code=303)
-    response.set_cookie(
-        "session",
-        session,
-        httponly=True,
-        secure=os.environ.get("COOKIE_SECURE", "false").lower() == "true",
-        samesite="lax",
-        max_age=30 * 24 * 60 * 60,
-    )
+    response.set_cookie("session", access, **_auth_cookie_kwargs(ACCESS_TOKEN_MAX_AGE))
+    response.set_cookie("refresh", refresh, **_auth_cookie_kwargs(REFRESH_TOKEN_MAX_AGE))
     return response
 
 
@@ -848,7 +1003,11 @@ def web_logout(request: Request):
     session = request.cookies.get("session")
     if session:
         revoke_session(session)
+    refresh = request.cookies.get("refresh")
+    if refresh:
+        revoke_refresh(refresh)
 
     response = RedirectResponse("/web/login", status_code=303)
     response.delete_cookie("session")
+    response.delete_cookie("refresh")
     return response

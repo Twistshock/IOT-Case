@@ -29,6 +29,14 @@ def auth_login(body: Any, parse_auth_body: Callable, login_user: Callable, token
         raise HTTPException(401, "bad credentials")
 
 
+def auth_refresh(body: Any, user_from_refresh_token: Callable, create_access_token: Callable, expires_in: int):
+    user_id = user_from_refresh_token(body.refresh_token)
+    return {
+        "access_token": create_access_token(user_id),
+        "expires_in": expires_in,
+    }
+
+
 def get_profile(user_id: str, db: Callable):
     with db() as conn:
         row = conn.execute("""
