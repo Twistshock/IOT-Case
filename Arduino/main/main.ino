@@ -21,18 +21,18 @@ void setup() {
     HeartRateInit();
     VibrationInit();
     BLEDeviceInit();
-    MultitaskInit();
+    // Restore user/steps before the first frame so the home screen is not zeros.
     SdCardSetup();
+    MultitaskInit();
 
     ACTIVE_SCREEN = HOME_SCREEN;
 
-    // Initial home-screen values
     DisplayHomeScreen(
-        0,      // Steps
-        0.0f,   // Burned kcal
-        0,      // Heart rate in bpm
-        0,      // SpO2 percentage
-        0.0f    // Temperature in Celsius
+        STEPS,
+        BURNED_KCAL,
+        HEART_RATE,
+        BLOOD_OXYGEN,
+        TEMPERATURE
     );
 }
 

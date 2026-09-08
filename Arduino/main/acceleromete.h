@@ -67,9 +67,7 @@ bool readAcceleration(int16_t &x, int16_t &y, int16_t &z)
 void AccelerometeInit()
 {
     delay(1000);
-
-    Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(100000);
+    // Code removed, avoid starting the same wire multiple times.
 
     Serial.println("Starting ADXL313...");
 
