@@ -85,10 +85,12 @@ void recoverI2C()
     Wire.setClock(100000);
 }
 
+
 void AccelerometeInit()
 {
     delay(1000);
-    // Code removed, avoid starting the same wire multiple times.
+
+    Wire.begin(SDA_PIN, SCL_PIN);
 
     Serial.println("Starting ADXL313...");
 

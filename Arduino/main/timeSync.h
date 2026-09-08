@@ -136,6 +136,15 @@ inline String EpochToIso(time_t epoch)
     return FormatEpoch(epoch, "%Y-%m-%dT%H:%M:%SZ");
 }
 
+// 1788344428 -> "2026-09-02", the day a stored record belongs to.
+// Year first so the days sort as plain text, unlike EpochToDate's
+// "%d/%m/%Y". Empty when the time is unknown, and a record with no
+// day cannot be filed, so callers have to check.
+inline String EpochToIsoDate(time_t epoch)
+{
+    return FormatEpoch(epoch, "%Y-%m-%d");
+}
+
 // =====================================================
 // THE TIME RIGHT NOW, AS TEXT
 // =====================================================
@@ -162,6 +171,12 @@ inline String GetDateTime()
 inline String GetTimestamp()
 {
     return EpochToIso(GetEpoch());
+}
+
+// "2026-09-02", the day today's tracker record is filed under
+inline String GetIsoDate()
+{
+    return EpochToIsoDate(GetEpoch());
 }
 
 #endif

@@ -16,6 +16,7 @@ enum MessageType
   MESSAGE_UNKNOWN,
   MESSAGE_DEVICE_CONNECTED,
   MESSAGE_DASHBROAD_DATA,
+  MESSAGE_CLEAN_TRACKER_LOG,
 };
 
 // C++ can't switch on a string, so the "type" field is turned into an enum first
@@ -26,6 +27,9 @@ inline MessageType ParseMessageType(const char *dataType)
   
   if (strcmp(dataType, "fetch_dashbroad") == 0)
       return MESSAGE_DASHBROAD_DATA;
+
+  if (strcmp(dataType, "clean_tracker_log") == 0)
+      return MESSAGE_CLEAN_TRACKER_LOG;
 
 
   return MESSAGE_UNKNOWN;
@@ -51,6 +55,16 @@ inline void HandleaSyncDevice(JsonDocument &doc)
       TIMESTAMP = GetDateTime();
 
       saveUserData(username, GetTimestamp());
+
+      // Today's date is only known now, so today's record can finally be
+      // found. Without this the next timed save would overwrite it with the
+      // counters that have been running from zero since the reboot.
+      readTrackerData();
+
+      // The date has only just become known, so this is the first moment the
+      // card can be sorted into "today" and "older" - and the moment the app
+      // is about to start expecting the older days to arrive.
+      checkOldData();
 
       Serial.printf(
           "sync data with username: %s at %s\n",
@@ -88,6 +102,11 @@ inline void HandleFetchDashbroad(JsonDocument &doc)
   BLESendMessage(message);
 }
 
+
+void HandleCleanTrackerLog(JsonDocument &doc){
+  //deleteOldData();
+}
+
 // Parse one JSON message from the phone and dispatch on its "type" field
 inline void messageHandler(const char *data)
 {
@@ -114,8 +133,13 @@ inline void messageHandler(const char *data)
         break;
       
       case MESSAGE_DASHBROAD_DATA:
-        Serial.println("get_steps");
+        Serial.println("fetch_dashbroad");
         HandleFetchDashbroad(doc);
+        break;
+
+      case MESSAGE_CLEAN_TRACKER_LOG:
+        Serial.println("clean_tracker_log");
+        HandleCleanTrackerLog(doc);
         break;
 
       case MESSAGE_UNKNOWN:

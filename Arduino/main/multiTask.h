@@ -6,6 +6,7 @@
 #include <freertos/task.h>
 
 #include "updateData.h"
+#include "timeSync.h"
 
 // Update tracker data every 5 seconds
 constexpr uint32_t TRACKER_UPDATE_INTERVAL_MS = 5000;

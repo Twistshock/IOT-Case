@@ -27,6 +27,7 @@ void setup() {
 
     ACTIVE_SCREEN = HOME_SCREEN;
 
+
     DisplayHomeScreen(
         STEPS,
         BURNED_KCAL,

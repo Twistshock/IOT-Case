@@ -12,7 +12,10 @@ Haptic_Driver haptic;
 
 void VibrationInit()
 {
-    // Code removed, avoid starting the same wire(SDA, SCL) multiple times.
+
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.setClock(100000);
+
     Serial.println("Starting DA7280...");
 
     if (!haptic.begin(Wire))
