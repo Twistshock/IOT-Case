@@ -54,6 +54,24 @@ CREATE TABLE IF NOT EXISTS weight_entries (
     PRIMARY KEY (user_id, day)
 );
 
+-- Opaque access tokens (15 min). Multiple rows per user so app + web can both stay logged in.
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token_hash BYTEA PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS user_sessions_user_idx ON user_sessions (user_id);
+
+-- Opaque refresh tokens (14 days). Same: one row per login, not unique on user_id.
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    token_hash BYTEA PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx ON refresh_tokens (user_id);
+
 -- Seed user for MQTT tests before register/login exists.
 -- password_hash is unusable ('!'); tests use HMAC device_token, not a password.
 INSERT INTO users (id, username, password_hash)

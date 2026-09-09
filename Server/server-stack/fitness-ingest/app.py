@@ -13,6 +13,8 @@ import threading
 import secrets
 import paho.mqtt.client as mqtt
 import psycopg
+from paho.mqtt.enums import CallbackAPIVersion
+from psycopg import sql
 
 from defs import api_defs
 from contextlib import asynccontextmanager  # for creating async context managers for resource setup/cleanup
@@ -88,7 +90,10 @@ def _store_opaque_token(table: str, user_id: str, ttl: timedelta) -> str:
     raw = secrets.token_urlsafe(32)
     with db() as conn:
         conn.execute(
-            f"INSERT INTO {table} (token_hash, user_id, expires_at) VALUES (%s, %s, %s)",
+            sql.SQL(
+                "INSERT INTO {table} (token_hash, user_id, expires_at) "
+                "VALUES (%s, %s, %s)"
+            ).format(table=sql.Identifier(table)),
             (_token_hash(raw), user_id, datetime.now(timezone.utc) + ttl),
         )
         conn.commit()
@@ -112,7 +117,10 @@ def _user_from_token(raw: str, table: str, error: str) -> str:
     raw = _normalize_token(raw)
     with db() as conn:
         row = conn.execute(
-            f"SELECT user_id FROM {table} WHERE token_hash = %s AND expires_at > now()",
+            sql.SQL(
+                "SELECT user_id FROM {table} "
+                "WHERE token_hash = %s AND expires_at > now()"
+            ).format(table=sql.Identifier(table)),
             (_token_hash(raw),),
         ).fetchone()
     if not row:
@@ -145,7 +153,9 @@ def _revoke_token(raw: str, table: str) -> None:
     raw = _normalize_token(raw)
     with db() as conn:
         conn.execute(
-            f"DELETE FROM {table} WHERE token_hash = %s",
+            sql.SQL("DELETE FROM {table} WHERE token_hash = %s").format(
+                table=sql.Identifier(table)
+            ),
             (_token_hash(raw),),
         )
         conn.commit()
@@ -261,6 +271,15 @@ def handle_steps(conn: psycopg.Connection, body: dict[str, Any]) -> str | None:
     )
     return None
 
+# Upsert - Update, or Insert if none exists.
+# To update the steps for the day with the running total coming in from the tracker
+# Or create a new with a standard goal of 10,000 steps
+def upsert_daily_steps(
+    conn: psycopg.Connection, user_id: str, day: date, steps: int
+) -> None:
+    # New days get goal 10000; existing rows keep their goal and overwrite steps.
+    conn.execute("SELECT upsert_daily_steps(%s, %s, %s)", (user_id, day, steps))
+
 # Validates and stores a user's heart rate and blood oxygen readings.
 def handle_vitals(conn: psycopg.Connection, body: dict[str, Any], ts: datetime) -> str | None:
     try:
@@ -360,7 +379,7 @@ def on_connect(client: mqtt.Client, _userdata: Any, _flags: Any, reason_code: An
 
 # Creates and starts the MQTT client in a background thread.
 def start_mqtt() -> mqtt.Client:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fitness-ingest")
+    client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id="fitness-ingest")
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
@@ -464,6 +483,7 @@ def register_user(username: str, password: str) -> str:
             (username, password_hash),
         ).fetchone()
         conn.commit()
+        assert row is not None
         user_id = str(row[0])
         print(f"new user {user_id} username={username}")
         return user_id
@@ -536,10 +556,9 @@ class GPSBody(BaseModel):
 # For batch ingestion of data.
 class MeasurementBody(BaseModel):
     tracker_id: str = Field(pattern=r"^[0-9a-f]{12,32}$")
-    sequence: int = Field(ge=0)
     captured_at: datetime
     timestamp_estimated: bool = False
-    step_delta: int = Field(default=0, ge=0)
+    # Running daily total; written to daily_steps, not stored on vitals.
     steps: int = Field(ge=0)
     bpm: int | None = Field(default=None, ge=20, le=250)
     spo2: int | None = Field(default=None, ge=0, le=100)
@@ -682,16 +701,24 @@ def post_measurement_batch(
         raise HTTPException(422, "one batch must contain exactly one tracker")
 
     with db() as conn:
+        timed_items: list[tuple[MeasurementBody, datetime]] = []
+        for item in body.measurements:
+            captured_at = item.captured_at
+            if captured_at.tzinfo is None:
+                captured_at = captured_at.replace(tzinfo=timezone.utc)
+            captured_at = captured_at.astimezone(timezone.utc)
+            timed_items.append((item, captured_at))
+
         # A tracker is not permanently assigned to an account. However, an
         # existing measurement that was already stored cannot change owners.
-        for item in body.measurements:
+        for item, captured_at in timed_items:
             existing = conn.execute(
                 """
                 SELECT user_id
                 FROM vitals
-                WHERE tracker_id = %s AND sequence = %s
+                WHERE tracker_id = %s AND time = %s
                 """,
-                (item.tracker_id, item.sequence),
+                (item.tracker_id, captured_at),
             ).fetchone()
             if existing and str(existing[0]) != user_id:
                 raise HTTPException(
@@ -699,58 +726,46 @@ def post_measurement_batch(
                     "measurement was already uploaded by another account",
                 )
 
-        for item in body.measurements:
-            captured_at = item.captured_at
-            if captured_at.tzinfo is None:
-                captured_at = captured_at.replace(tzinfo=timezone.utc)
-            captured_at = captured_at.astimezone(timezone.utc)
-
+        # Later samples overwrite daily_steps for that date.
+        for item, captured_at in sorted(timed_items, key=lambda pair: pair[1]):
             conn.execute(
                 """
                 INSERT INTO vitals (
-                    tracker_id, sequence, user_id, time,
-                    timestamp_estimated, step_delta, steps,
-                    bpm, spo2, temperature_c
+                    tracker_id, user_id, time,
+                    timestamp_estimated, bpm, spo2, temperature_c
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (tracker_id, sequence)
-                    WHERE tracker_id IS NOT NULL AND sequence IS NOT NULL
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, time)
                 DO NOTHING
                 """,
                 (
                     item.tracker_id,
-                    item.sequence,
                     user_id,
                     captured_at,
                     item.timestamp_estimated,
-                    item.step_delta,
-                    item.steps,
                     item.bpm,
                     item.spo2,
                     item.temperature_c,
                 ),
             )
+            # Upserts the running total steps into our daily_steps tracker.
+            upsert_daily_steps(conn, user_id, captured_at.date(), item.steps)
 
         confirmed = []
-        for item in body.measurements:
+        for item, captured_at in timed_items:
             row = conn.execute(
                 """
                 SELECT user_id
                 FROM vitals
-                WHERE tracker_id = %s AND sequence = %s
+                WHERE user_id = %s AND time = %s
                 """,
-                (item.tracker_id, item.sequence),
+                (user_id, captured_at),
             ).fetchone()
             if row:
-                if str(row[0]) != user_id:
-                    raise HTTPException(
-                        409,
-                        "measurement was concurrently uploaded by another account",
-                    )
                 confirmed.append(
                     {
                         "tracker_id": item.tracker_id,
-                        "sequence": item.sequence,
+                        "captured_at": captured_at.isoformat(),
                     }
                 )
 
@@ -776,15 +791,16 @@ def get_measurements(
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT tracker_id, sequence, time, timestamp_estimated,
-                   step_delta, steps, bpm, spo2, temperature_c
-            FROM vitals
-            WHERE user_id = %s
-              AND time >= %s
-              AND time <= %s
-              AND tracker_id IS NOT NULL
-              AND sequence IS NOT NULL
-            ORDER BY time DESC
+            SELECT v.time, v.timestamp_estimated,
+                   d.steps, v.bpm, v.spo2, v.temperature_c
+            FROM vitals v
+            LEFT JOIN daily_steps d
+              ON d.user_id = v.user_id
+             AND d.day = (v.time AT TIME ZONE 'UTC')::date
+            WHERE v.user_id = %s
+              AND v.time >= %s
+              AND v.time <= %s
+            ORDER BY v.time DESC
             LIMIT %s
             """,
             (user_id, start, end, limit),
@@ -792,15 +808,12 @@ def get_measurements(
 
     return [
         {
-            "tracker_id": row[0],
-            "sequence": row[1],
-            "captured_at": row[2].isoformat(),
-            "timestamp_estimated": row[3],
-            "step_delta": row[4],
-            "steps": row[5],
-            "bpm": row[6],
-            "spo2": row[7],
-            "temperature_c": float(row[8]) if row[8] is not None else None,
+            "captured_at": row[0].isoformat(),
+            "timestamp_estimated": row[1],
+            "steps": row[2],
+            "bpm": row[3],
+            "spo2": row[4],
+            "temperature_c": float(row[5]) if row[5] is not None else None,
         }
         for row in rows
     ]
@@ -821,10 +834,19 @@ def get_summary(
         raise HTTPException(422, "from must be on or before to")
 
     with db() as conn:
+        steps_row = conn.execute(
+            """
+            SELECT COALESCE(SUM(steps), 0)
+            FROM daily_steps
+            WHERE user_id = %s
+              AND day >= %s
+              AND day <= %s
+            """,
+            (user_id, start.date(), end.date()),
+        ).fetchone()
         row = conn.execute(
             """
-            SELECT COALESCE(SUM(step_delta), 0),
-                   MIN(bpm), AVG(bpm), MAX(bpm),
+            SELECT MIN(bpm), AVG(bpm), MAX(bpm),
                    MIN(spo2), AVG(spo2), MAX(spo2),
                    COUNT(*)
             FROM vitals
@@ -832,26 +854,28 @@ def get_summary(
               AND time >= %s
               AND time <= %s
               AND tracker_id IS NOT NULL
-              AND sequence IS NOT NULL
             """,
             (user_id, start, end),
         ).fetchone()
 
+    assert steps_row is not None
+    assert row is not None
+
     return {
         "from": start.isoformat(),
         "to": end.isoformat(),
-        "steps": int(row[0]),
+        "steps": int(steps_row[0]),
         "bpm": {
-            "min": row[1],
-            "avg": float(row[2]) if row[2] is not None else None,
-            "max": row[3],
+            "min": row[0],
+            "avg": float(row[1]) if row[1] is not None else None,
+            "max": row[2],
         },
         "spo2": {
-            "min": row[4],
-            "avg": float(row[5]) if row[5] is not None else None,
-            "max": row[6],
+            "min": row[3],
+            "avg": float(row[4]) if row[4] is not None else None,
+            "max": row[5],
         },
-        "sample_count": row[7],
+        "sample_count": row[6],
     }
 
 
@@ -940,12 +964,15 @@ def web_dashboard_page(
         ).fetchone()
         rows = conn.execute(
             """
-            SELECT time, steps, bpm, spo2, temperature_c
-            FROM vitals
-            WHERE user_id = %s
-              AND time >= %s
-              AND time <= %s
-            ORDER BY time ASC
+            SELECT v.time, d.steps, v.bpm, v.spo2, v.temperature_c
+            FROM vitals v
+            LEFT JOIN daily_steps d
+              ON d.user_id = v.user_id
+             AND d.day = (v.time AT TIME ZONE 'UTC')::date
+            WHERE v.user_id = %s
+              AND v.time >= %s
+              AND v.time <= %s
+            ORDER BY v.time ASC
             LIMIT 5000
             """,
             (user_id, start, end),
