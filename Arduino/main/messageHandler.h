@@ -50,9 +50,8 @@ inline void HandleaSyncDevice(JsonDocument &doc)
 
   if (SaveTime(epoch))
   {
-      // Read back from the clock instead of the payload, so the date keeps
+      // Nothing to cache here: the display reads the clock live, so it keeps
       // up on its own instead of freezing at the moment of the last connect.
-      TIMESTAMP = GetDateTime();
 
       saveUserData(username, GetTimestamp());
 

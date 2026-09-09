@@ -111,9 +111,9 @@ bool readUserData(
 
     USERNAME = username;
 
-    // The stored timestamp is when the phone last synced, not now. The device
-    // was off in between and cannot tell for how long, so TIMESTAMP is left
-    // unknown until the phone reconnects and starts the clock again.
+    // The stored timestamp is when the phone last synced, not now, so it is
+    // read for the record only. The current time comes from the RTC, which
+    // kept running while the device was off.
 
     return true;
 }

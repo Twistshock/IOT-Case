@@ -52,8 +52,8 @@ constexpr unsigned long HEART_RATE_INTERVAL = 4000;
 // never reach the alert.
 // =====================================================
 
-constexpr int HEART_RATE_TOO_LOW = 60;
-constexpr int HEART_RATE_TOO_HIGH = 100;
+constexpr int HEART_RATE_TOO_LOW = 40;
+constexpr int HEART_RATE_TOO_HIGH = 140;
 
 // SpO2 has no upper alert: the scale ends at 100 and the validity check has
 // already discarded anything above it, so a high bound could never fire.

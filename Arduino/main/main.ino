@@ -7,6 +7,7 @@
 #include "messageHandler.h"
 #include "sdCard.h"
 #include "multiTask.h"
+#include "RTC.h"
 #include "timeSync.h"
 
 void setup() {
@@ -14,6 +15,7 @@ void setup() {
     delay(1000);
 
     // Has to run before anything formats or stores a time
+    RTCSetup();
     TimeSyncInit();
 
     DisplayInit();

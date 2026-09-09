@@ -1,4 +1,5 @@
 /App/node_modules
 /.env
 /App/.env
+/App/.env.example
 /Arduino/main/.claude
