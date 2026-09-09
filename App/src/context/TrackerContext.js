@@ -42,22 +42,19 @@ export function TrackerProvider({ children }) {
 
   const handleSaveTrackerStats = async (data) => {
     if (!Array.isArray(data) || data.length === 0) return;
-
     const payload = {
       measurements: data.map((item, index) => ({
         tracker_id: 'a1b2c3d4e5f622',
-        sequence: index + 1,
         captured_at: item.updated_at,
         timestamp_estimated: false,
         step_delta: 1,
         steps: Number(item.steps) ?? 0,
-        bpm: Number(item.bpm) ?? 0,
+        bpm: Number(item.heart_rate) ?? 0,
         spo2: Number(item.spo2) ?? 0,
         temperature_c: Number(item.temperature) ?? 0,
       })),
     };
     
-
     console.log('Saving tracker data to DB:', payload);
     const save = await fetchMeasurementsDB(payload);
     if(save?.ok){
