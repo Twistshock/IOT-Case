@@ -34,13 +34,14 @@ PG_HOST = os.environ["POSTGRES_HOST"]
 FITNESS_DB = os.environ["FITNESS_DB"]
 FITNESS_DB_USER = os.environ["FITNESS_DB_USER"]
 FITNESS_DB_PASSWORD = os.environ["FITNESS_DB_PASSWORD"]
-HTTP_HOST = os.environ.get("HTTP_HOST", "0.0.0.0")
-HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
+HTTP_HOST = os.environ.get("HTTP_HOST", "0.0.0.0") # 0.0.0.0 means all local traffic
+HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080")) # 8080 is the default port for FastAPI
 SEED_USER_ID = os.environ.get("SEED_USER_ID", "11111111-1111-1111-1111-111111111111")
-PASSWORD_HASHER = PasswordHasher()
+PASSWORD_HASHER = PasswordHasher() # from argon2 import PasswordHasher, used for password hashing
 USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,32}$") # re is for regex, here we allow lowercase a-z, 0-9, and .-_.
 
 #Checks that our token secret in the ,env file is secure enough.
+# Our token secret is used to generate a device token for the user.
 TOKEN_SECRET = bytes.fromhex(os.environ["FITNESS_DEVICE_TOKEN_SECRET"])
 if len(TOKEN_SECRET) != 32:
     raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with '  ssl rand -hex 32'")
@@ -52,7 +53,7 @@ ACCESS_TOKEN_TTL = timedelta(minutes=15)
 REFRESH_TOKEN_TTL = timedelta(weeks=2)
 ACCESS_TOKEN_MAX_AGE = int(ACCESS_TOKEN_TTL.total_seconds())
 REFRESH_TOKEN_MAX_AGE = int(REFRESH_TOKEN_TTL.total_seconds())
-
+# We.. should probably invalidate old tokens. But no time rn.
 
 
 # psychopg allows python to connect to a python database.
@@ -68,16 +69,19 @@ def db() -> psycopg.Connection:
         password=FITNESS_DB_PASSWORD,
     )
 
+# Hashes the token using SHA-256.
 def _token_hash(raw: str) -> bytes:
     return hashlib.sha256(raw.encode("utf-8")).digest()
 
 
+# Normalizes the token by removing quotes and trailing whitespace.
 def _normalize_token(raw: str) -> str:
     # Removes quotes, and trailing whitespace.
     token = raw.strip().strip('"').strip("'")
     return token
 
 
+# Stores an opaque token in the database.
 def _store_opaque_token(table: str, user_id: str, ttl: timedelta) -> str:
     # table is a hardcoded name (user_sessions / refresh_tokens), never user input.
     # an opaque token is an unreadable string of characters that act as a reference.
@@ -93,20 +97,20 @@ def _store_opaque_token(table: str, user_id: str, ttl: timedelta) -> str:
         conn.commit()
     return raw
 
-
+# Creates an access token for the given user ID.
 def create_access_token(user_id: str) -> str:
     return _store_opaque_token("user_sessions", user_id, ACCESS_TOKEN_TTL)
 
-
+# Creates a refresh token for the given user ID.
 def create_refresh_token(user_id: str) -> str:
     return _store_opaque_token("refresh_tokens", user_id, REFRESH_TOKEN_TTL)
 
-
+# Issues a new access and refresh token pair for the given user ID.
 def issue_tokens(user_id: str) -> tuple[str, str]:
     """New access + refresh pair. Does not revoke other logins (app and web can coexist)."""
     return create_access_token(user_id), create_refresh_token(user_id)
 
-
+# Retrieves the user ID from the given token.
 def _user_from_token(raw: str, table: str, error: str) -> str:
     raw = _normalize_token(raw)
     with db() as conn:
@@ -138,11 +142,11 @@ def user_from_session_token(raw: str) -> str:
             "You may have submitted the wrong kind of token. Please try again.",
         )
 
-
+# Retrieves the user ID from the given refresh token.
 def user_from_refresh_token(raw: str) -> str:
     return _user_from_token(raw, "refresh_tokens", "invalid or expired refresh token")
 
-
+# Revokes, used with logout.
 def _revoke_token(raw: str, table: str) -> None:
     raw = _normalize_token(raw)
     with db() as conn:
@@ -396,6 +400,7 @@ def token_gen_login(user_id: str, username: str | None = None) -> dict[str, Any]
         "refresh_token": refresh,
     }
 
+# Registers a new user.
 def register_user(username: str, password: str) -> str:
     """Unknown username → INSERT a new user. Taken username → LookupError."""
     password_hash = PASSWORD_HASHER.hash(password)
@@ -419,7 +424,7 @@ def register_user(username: str, password: str) -> str:
         print(f"new user {user_id} username={username}")
         return user_id
 
-
+# Logs in a user.
 def login_user(username: str, password: str) -> str:
     with db() as conn:
         row = conn.execute(
@@ -445,7 +450,7 @@ def user_from_bearer(
     return user_from_session_token(creds.credentials)
 
 
-
+## Defined bodies and fields using Pydantic.
 class AuthBody(BaseModel):
     username: str
     password: str
@@ -506,8 +511,7 @@ class MeasurementBatchBody(BaseModel):
         min_length=1, max_length=MEASUREMENT_BATCH_MAX
     )
 
-
-
+# Parses a timestamp query.
 def _parse_rfc3339_timestamp_query(value: str | None) -> datetime | None: # RFC3339 is a standard timestamp format
     if value is None:
         return None
@@ -552,6 +556,7 @@ app.add_middleware(
 ## podman compose build fitness-ingest
 ## podman rm -f iot-fitness-ingest
 ## podman-compose up -d fitness-ingest
+### Definitions are in api_defs.py
 @app.get("/health")
 def health():
     return {"status": "ok"}
