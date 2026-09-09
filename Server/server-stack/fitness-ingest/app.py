@@ -484,6 +484,11 @@ class GPSBody(BaseModel):
     lon: float = Field(ge=-180, le=180)
     accuracy_m: float = Field(ge=0, default=0.0)
 
+# 25000 should cover a full day, so i made it 50k.
+MEASUREMENT_BATCH_MAX = 50000
+MEASUREMENT_BATCH_CHUNK = 500
+
+
 # For batch ingestion of data.
 class MeasurementBody(BaseModel):
     tracker_id: str = Field(pattern=r"^[0-9a-f]{12,32}$")
@@ -495,9 +500,11 @@ class MeasurementBody(BaseModel):
     spo2: int | None = Field(default=None, ge=0, le=100)
     temperature_c: float | None = Field(default=None, ge=-20, le=80)
 
-# Ingests a list of MeasurementBody
+# Ingests a list of MeasurementBody. Large posts are split into smaller chunks.
 class MeasurementBatchBody(BaseModel):
-    measurements: list[MeasurementBody] = Field(min_length=1, max_length=500)
+    measurements: list[MeasurementBody] = Field(
+        min_length=1, max_length=MEASUREMENT_BATCH_MAX
+    )
 
 
 
@@ -620,25 +627,20 @@ def post_vitals(
 ):
     return api_defs.post_vitals(body, user_id, db, parse_timestamp, handle_vitals)
 
-# For batch ingestion
-@app.post("/me/measurements/batch")
-def post_measurement_batch(
-    body: MeasurementBatchBody,
-    user_id: str = Depends(user_from_bearer),
-):
-    tracker_ids = sorted({item.tracker_id for item in body.measurements})
-    if len(tracker_ids) != 1:
-        raise HTTPException(422, "one batch must contain exactly one tracker")
+def _utc_captured_at(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def ingest_measurement_chunk(
+    user_id: str, items: list[MeasurementBody]
+) -> list[dict[str, str]]:
+    timed_items: list[tuple[MeasurementBody, datetime]] = []
+    for item in items:
+        timed_items.append((item, _utc_captured_at(item.captured_at)))
 
     with db() as conn:
-        timed_items: list[tuple[MeasurementBody, datetime]] = []
-        for item in body.measurements:
-            captured_at = item.captured_at
-            if captured_at.tzinfo is None:
-                captured_at = captured_at.replace(tzinfo=timezone.utc)
-            captured_at = captured_at.astimezone(timezone.utc)
-            timed_items.append((item, captured_at))
-
         # A tracker is not permanently assigned to an account. However, an
         # existing measurement that was already stored cannot change owners.
         for item, captured_at in timed_items:
@@ -681,7 +683,7 @@ def post_measurement_batch(
             # Upserts the running total steps into our daily_steps tracker.
             upsert_daily_steps(conn, user_id, captured_at.date(), item.steps)
 
-        confirmed = []
+        confirmed: list[dict[str, str]] = []
         for item, captured_at in timed_items:
             row = conn.execute(
                 """
@@ -701,7 +703,28 @@ def post_measurement_batch(
 
         conn.commit()
 
-    return {"ok": True, "confirmed": confirmed}
+    return confirmed
+
+
+# For batch ingestion. Posts larger than MEASUREMENT_BATCH_CHUNK are split
+# so each DB transaction stays the original size.
+@app.post("/me/measurements/batch")
+def post_measurement_batch(
+    body: MeasurementBatchBody,
+    user_id: str = Depends(user_from_bearer),
+):
+    confirmed: list[dict[str, str]] = []
+    items = body.measurements
+    for i in range(0, len(items), MEASUREMENT_BATCH_CHUNK):
+        confirmed.extend(
+            ingest_measurement_chunk(user_id, items[i:i + MEASUREMENT_BATCH_CHUNK])
+        )
+
+    return {
+        "ok": True,
+        "confirmed_count": len(confirmed),
+        "confirmed": confirmed,
+    }
 
 # Returns the authenticated user's measurements within an optional time range.
 @app.get("/me/measurements")
@@ -709,7 +732,7 @@ def get_measurements(
     user_id: str = Depends(user_from_bearer),
     from_ts: str | None = Query(None, alias="from"),
     to_ts: str | None = Query(None, alias="to"),
-    limit: int = Query(1000, ge=1, le=5000),
+    limit: int = Query(1000, ge=1, le=50000),
 ):
     end = _parse_rfc3339_timestamp_query(to_ts) or datetime.now(timezone.utc)
     start = _parse_rfc3339_timestamp_query(from_ts)
