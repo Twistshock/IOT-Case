@@ -71,11 +71,12 @@ async function SaveBpm(stats) {
 }
 
 /** Stores a step count, the same way SaveBpm stores a heart-rate reading. */
-async function SaveSteps(stats) {
-  const payload = numericFields(stats, ['steps', 'kcal']);
-  if (payload.steps == null) return null;
-
-  payload.timestamp = readingTimestamp();
+async function SaveStepGoal(goal, date, steps) {
+  const payload = {
+    goal,
+    date,
+    steps,
+  };
 
   try {
     const { data } = await apiClient.post(DASHBOARD_ENDPOINTS.steps, payload);
@@ -92,6 +93,33 @@ async function SaveSteps(stats) {
     throw new Error(readableError(error, 'Could not save your step count.'));
   }
 }
+
+// get steps from database, for the current day. The tracker may not be connected, so this is the fallback.
+
+const getStepsFromDB = async () => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+
+    const data = await apiClient.get(DASHBOARD_ENDPOINTS.steps, {
+      params: {
+        from: today,
+        to: today,
+      },
+    });
+
+    if(data?.status !== 200){
+      throw new Error('Server did not return a valid response for steps.');
+    }
+    return data?.data;
+  } catch (error) {
+    console.error('Error fetching steps from DB:', error);
+
+    throw new Error(
+      readableError(error, 'Could not fetch your step count.')
+    );
+  }
+};
+
 
 
 async function fetchStepsDB() {
@@ -171,4 +199,72 @@ const fetchMeasurementsDB = async (payload) => {
   }
 }
 
-export { SaveBpm, SaveSteps, getStepsFromESP32, fetchStepsDB, fetchMeasurementsDB };
+const getMeasurementsDB = async (date = new Date(), limit = 1) => {
+  try {
+    const day = date.toISOString().split('T')[0];
+
+    const data = await apiClient.get(
+      DASHBOARD_ENDPOINTS.getMeasurements,
+      {
+        params: {
+          from: `${day}T00:00:00Z`,
+          to: `${day}T23:59:59Z`,
+          limit: limit,
+        },
+      }
+    );
+
+    if(data?.status !== 200){
+      throw new Error('Server did not return a valid response for measurements.');
+    }
+    return data?.data;
+  } catch (error) {
+    console.error('Error fetching measurements from DB:', error);
+
+    throw new Error(
+      readableError(error, 'Could not fetch your measurements.')
+    );
+  }
+};
+
+/**
+ * Every reading stored for one calendar day, newest first.
+ *
+ * The day is taken from the phone's clock, so "today" is the user's today and
+ * not UTC's; the two boundaries are sent as instants because that is what the
+ * backend filters on. Returns [] when the day has nothing in it.
+ */
+const getMeasurementsHistory = async (date = new Date(), limit = 200) => {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+
+  try {
+    const { data } = await apiClient.get(DASHBOARD_ENDPOINTS.getMeasurements, {
+      params: {
+        from: start.toISOString(),
+        to: end.toISOString(),
+        limit,
+      },
+    });
+
+    // The endpoint answers with the plain list; tolerate a wrapped one too.
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.items)) return data.items;
+
+    return [];
+  } catch (error) {
+    console.error(
+      'Error fetching measurement history:',
+      error?.response?.status,
+      JSON.stringify(error?.response?.data)
+    );
+
+    throw new Error(readableError(error, 'Could not load your measurements.'));
+  }
+};
+
+
+export { SaveBpm, SaveStepGoal, getStepsFromDB, getStepsFromESP32, fetchStepsDB, fetchMeasurementsDB, getMeasurementsDB, getMeasurementsHistory };

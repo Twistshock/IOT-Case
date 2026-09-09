@@ -25,6 +25,10 @@ import { colors } from '../constants/colors';
  *  - width      card width in pixels (calculated by the screen)
  *  - isLive     true once this card shows a real reading
  *  - index      position in the grid, used to stagger the entrance
+ *  - alert      { level: 'danger' | 'warning', message } when the reading is
+ *               outside its safe range, otherwise null. An alert repaints the
+ *               card red or amber and adds a line of warning text; without one
+ *               the card keeps its normal white style.
  */
 export default function HealthCard({
   title,
@@ -36,7 +40,9 @@ export default function HealthCard({
   width,
   isLive = false,
   index = 0,
+  alert = null,
 }) {
+  const alertTheme = alert ? ALERT_THEMES[alert.level] : null;
   // Entrance: 0 -> 1 once, just after mount.
   const enter = useRef(new Animated.Value(0)).current;
   // Idle blink while the card is still waiting for its first reading.
@@ -162,10 +168,26 @@ export default function HealthCard({
     outputRange: [0, 0.35, 0],
   });
 
+  // On an alert the accent follows the alert color, so the icon, the ring and
+  // the warning text all read as one warning instead of the card's own hue.
+  const accent = alertTheme ? alertTheme.accent : color;
+  const iconBackground = alertTheme ? alertTheme.iconBackground : background;
+
   return (
     <Animated.View
+      accessibilityRole="summary"
+      accessibilityLabel={
+        alert
+          ? `${title}: ${value} ${unit}. Warning: ${alert.message}`
+          : `${title}: ${value} ${unit}`
+      }
       style={[
         styles.card,
+        alertTheme && {
+          backgroundColor: alertTheme.background,
+          borderWidth: 1,
+          borderColor: alertTheme.border,
+        },
         { width, opacity: enter, transform: [{ translateY }] },
       ]}
     >
@@ -175,7 +197,7 @@ export default function HealthCard({
           style={[
             styles.pulseRing,
             {
-              backgroundColor: color,
+              backgroundColor: accent,
               opacity: ringOpacity,
               transform: [{ scale: ringScale }],
             },
@@ -186,13 +208,13 @@ export default function HealthCard({
           style={[
             styles.iconCircle,
             {
-              backgroundColor: background,
+              backgroundColor: iconBackground,
               opacity: blink,
               transform: [{ scale: iconScale }],
             },
           ]}
         >
-          <Ionicons name={icon} size={22} color={color} />
+          <Ionicons name={icon} size={22} color={accent} />
         </Animated.View>
       </View>
 
@@ -202,6 +224,7 @@ export default function HealthCard({
         <Animated.Text
           style={[
             styles.value,
+            alertTheme && { color: alertTheme.accent },
             { opacity: blink, transform: [{ scale: pop }] },
           ]}
         >
@@ -209,9 +232,34 @@ export default function HealthCard({
         </Animated.Text>
         <Text style={styles.unit}>{unit}</Text>
       </View>
+
+      {alert ? (
+        <View style={styles.alertRow}>
+          <Ionicons name="warning" size={14} color={accent} />
+          <Text style={[styles.alertText, { color: accent }]}>
+            {alert.message}
+          </Text>
+        </View>
+      ) : null}
     </Animated.View>
   );
 }
+
+/** Card colors for each alert level; no entry means the normal white card. */
+const ALERT_THEMES = {
+  danger: {
+    background: colors.dangerSoft,
+    border: colors.danger,
+    accent: colors.danger,
+    iconBackground: '#FBD9D9',
+  },
+  warning: {
+    background: colors.warningSoft,
+    border: colors.warning,
+    accent: colors.warning,
+    iconBackground: '#FCEBC4',
+  },
+};
 
 const styles = StyleSheet.create({
   card: {
@@ -268,5 +316,17 @@ const styles = StyleSheet.create({
     color: colors.muted,
     marginLeft: 6,
     marginBottom: 4,
+  },
+  alertRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginTop: 10,
+  },
+  alertText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
   },
 });

@@ -77,10 +77,6 @@ export default function DeviceScreen() {
 
   async function asyncDevice() {
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    const testTomorrow = tomorrow.getTime() / 1000;
-
     const payload = {
       epoch: Math.floor(now.getTime() / 1000),
       username: user?.username || '...', // Replace with actual username if available
