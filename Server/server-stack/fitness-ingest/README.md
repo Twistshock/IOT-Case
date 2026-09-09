@@ -6,10 +6,6 @@
 paho-mqtt==2.1.0
 ```
 
-* **Paho MQTT** — MQTT client library.
-* Used to connect to MQTT brokers and **publish/subscribe** to MQTT topics.
-* Commonly used for IoT, messaging, and event-driven applications.
-
 ```text
 psycopg[binary]==3.2.9
 ```

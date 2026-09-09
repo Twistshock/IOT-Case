@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MQTT + HTTP ingest for the fitness database. Runs as nologin user fitness."""
+"""HTTP ingest for the fitness database. Runs as nologin user fitness."""
 
 from __future__ import annotations
 # Imports and reqs are detailed in the fitness-ingest/README.md markdown file.
@@ -9,11 +9,8 @@ import json
 import os
 import re
 import hashlib # hashing functions
-import threading
 import secrets
-import paho.mqtt.client as mqtt
 import psycopg
-from paho.mqtt.enums import CallbackAPIVersion
 from psycopg import sql
 
 from defs import api_defs
@@ -33,8 +30,6 @@ from fastapi.templating import Jinja2Templates # Web template engine
 from pydantic import BaseModel, Field
 
 # os.environ gets environment variables.
-MQTT_HOST = os.environ["MQTT_HOST"]
-MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 PG_HOST = os.environ["POSTGRES_HOST"]
 FITNESS_DB = os.environ["FITNESS_DB"]
 FITNESS_DB_USER = os.environ["FITNESS_DB_USER"]
@@ -50,7 +45,6 @@ TOKEN_SECRET = bytes.fromhex(os.environ["FITNESS_DEVICE_TOKEN_SECRET"])
 if len(TOKEN_SECRET) != 32:
     raise SystemExit("FITNESS_DEVICE_TOKEN_SECRET must be 32 bytes (64 hex chars), you can generate one with '  ssl rand -hex 32'")
 
-MQTT_FILTER = "users/+/fitness/#"
 security = HTTPBearer()
 
 # Access tokens are short-lived; refresh tokens last two weeks and are not extended on use.
@@ -251,7 +245,7 @@ def parse_timestamp(value: Any) -> datetime | None:
 def handle_steps(conn: psycopg.Connection, body: dict[str, Any]) -> str | None:
     try:
         raw_day = body["date"]
-        day = raw_day if isinstance(raw_day, date) else date.fromisoformat(raw_day) # To handle both ISO dates and MQTT date strings.
+        day = raw_day if isinstance(raw_day, date) else date.fromisoformat(raw_day) # To handle both ISO dates and MQTT date strings. Leaving as-is after mqtt removal.
         steps = int(body["steps"])
         goal = int(body["goal"])
     except (KeyError, TypeError, ValueError):
@@ -323,69 +317,6 @@ def handle_gps(conn: psycopg.Connection, body: dict[str, Any], ts: datetime) -> 
         (body["user_id"], ts, lat, lon, accuracy),
     )
     return None
-
-# Processes an incoming MQTT message and stores its fitness data in the database.
-def on_message(_client: mqtt.Client, _userdata: Any, msg: mqtt.MQTTMessage) -> None:
-    parsed = parse_topic(msg.topic)
-    if parsed is None:
-        print(f"ignore topic {msg.topic}")
-        return
-    user_id, kind = parsed #kind is steps, vitals, or gps from the MQTT topic
-    try: # Tries to parse the incoming json to a python dict
-        body = json.loads(msg.payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc: #Malformed JSON
-        print(f"bad json on {msg.topic}: {exc}")
-        return
-    if not isinstance(body, dict): # Verifies that our body is a valid dict format.
-        print("payload is not an object")
-        return
-    if body.get("user_id") != user_id:
-        print("user_id does not match topic")
-        return
-    if not require_token(user_id, body.get("device_token")):
-        print(f"bad device_token for {user_id}")
-        return
-    ts = parse_timestamp(body.get("timestamp"))
-    if ts is None:
-        print("missing/invalid timestamp")
-        return
-    try:
-        with db() as conn:
-            owner = conn.execute(
-                "SELECT 1 FROM users WHERE id = %s", (user_id,)
-            ).fetchone()
-            if not owner:
-                print(f"unknown user {user_id}")
-                return
-            if kind == "steps":
-                err = handle_steps(conn, body)
-            elif kind == "vitals":
-                err = handle_vitals(conn, body, ts)
-            else:
-                err = handle_gps(conn, body, ts)
-            if err:
-                print(err)
-                conn.rollback()
-                return
-            conn.commit()
-        print(f"stored {kind} for {user_id} at {ts.isoformat()}")
-    except Exception as exc:
-        print(f"handler error: {exc}")
-
-# Handles a successful MQTT connection and subscribes to fitness messages.
-def on_connect(client: mqtt.Client, _userdata: Any, _flags: Any, reason_code: Any, _props: Any = None) -> None:
-    print(f"mqtt connected: {reason_code}")
-    client.subscribe(MQTT_FILTER, qos=1)
-
-# Creates and starts the MQTT client in a background thread.
-def start_mqtt() -> mqtt.Client:
-    client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id="fitness-ingest")
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
-    thread = threading.Thread(target=client.loop_forever, daemon=True)
-    thread.start()
-    return client
 
 # Cleans up a username by removing surrounding spaces and converting it to lowercase.
 def clean_username(raw: str) -> str:
@@ -580,12 +511,11 @@ def _parse_rfc3339_timestamp_query(value: str | None) -> datetime | None: # RFC3
 
 
 # @asynccontextmanager makes this function run setup code when the app starts (before yield) 
-# Here it starts the DB and MQTT client.
+# Here it starts the DB and verifies that it exists.
 # A sample can be found at https://fastapi.tiangolo.com/advanced/events/#lifespan
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     seed_user_ready()
-    start_mqtt()
     yield
 
 
