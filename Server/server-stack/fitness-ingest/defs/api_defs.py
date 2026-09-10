@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 # https://typing.python.org/en/latest/spec/callables.html#callable
+# A callable is anything that can be called. 
 def auth_register(body: Any, parse_auth_body: Callable, register_user: Callable, token_gen: Callable):
     try:
         username, password = parse_auth_body(body.model_dump())
@@ -16,7 +17,8 @@ def auth_register(body: Any, parse_auth_body: Callable, register_user: Callable,
         raise HTTPException(400, str(exc))
     except LookupError:
         raise HTTPException(409, "username taken")
-
+# model.dump() is used to convert the Pydantic model into a dictionary.
+# pydantic.dev/docs/validation/2.3/usage/serialization/
 
 def auth_login(body: Any, parse_auth_body: Callable, login_user: Callable, token_gen: Callable):
     try:
@@ -27,6 +29,14 @@ def auth_login(body: Any, parse_auth_body: Callable, login_user: Callable, token
         raise HTTPException(400, str(exc))
     except PermissionError:
         raise HTTPException(401, "bad credentials")
+
+
+def auth_refresh(body: Any, user_from_refresh_token: Callable, create_access_token: Callable, expires_in: int):
+    user_id = user_from_refresh_token(body.refresh_token)
+    return {
+        "access_token": create_access_token(user_id),
+        "expires_in": expires_in,
+    }
 
 
 def get_profile(user_id: str, db: Callable):

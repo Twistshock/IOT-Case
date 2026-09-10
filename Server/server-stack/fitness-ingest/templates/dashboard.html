@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fitness dashboard</title>
+    <style>
+      body { font-family: sans-serif; margin: 1.5rem; }
+      header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+      header h1 { flex: 1; font-size: 1.25rem; margin: 0; }
+      nav { margin: 1rem 0; }
+      svg { width: 100%; height: 200px; border: 1px solid #ccc; background: #fff; }
+      section { margin-bottom: 1.5rem; }
+      h2 { font-size: 1rem; margin: 0 0 0.4rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Dashboard{% if username %} — {{ username }}{% endif %}</h1>
+      <form method="post" action="/web/logout">
+        <button type="submit">Log out</button>
+      </form>
+    </header>
+
+    <nav>
+      {% if range_name == "hour" %}<strong>Past hour</strong>{% else %}<a href="/web/dashboard?range=hour">Past hour</a>{% endif %}
+      ·
+      {% if range_name == "day" %}<strong>Past day</strong>{% else %}<a href="/web/dashboard?range=day">Past day</a>{% endif %}
+      ·
+      {% if range_name == "2days" %}<strong>Past two days</strong>{% else %}<a href="/web/dashboard?range=2days">Past two days</a>{% endif %}
+
+      {% if range_name == "week" %}<strong>Past week</strong>{% else %}<a href="/web/dashboard?range=week">Past week</a>{% endif %}
+    </nav>
+
+    <section>
+      <h2>Heart rate (bpm)</h2>
+      <svg id="chart-bpm" viewBox="0 0 640 200"></svg>
+    </section>
+    <section>
+      <h2>SpO2 (%)</h2>
+      <svg id="chart-spo2" viewBox="0 0 640 200"></svg>
+    </section>
+    <section>
+      <h2>Temperature (°C)</h2>
+      <svg id="chart-temperature_c" viewBox="0 0 640 200"></svg>
+    </section>
+    <section>
+      <h2>Steps</h2>
+      <svg id="chart-steps" viewBox="0 0 640 200"></svg>
+    </section>
+
+    <script type="application/json" id="chart-data">{{ points_json | safe }}</script>
+    <script>
+      const POINTS = JSON.parse(document.getElementById("chart-data").textContent);
+
+      function drawChart(svgId, key) {
+        const svg = document.getElementById(svgId);
+        const rows = POINTS
+          .map((p) => ({ x: Date.parse(p.t), y: p[key] }))
+          .filter((p) => p.y !== null && p.y !== undefined && Number.isFinite(p.y));
+
+        if (!rows.length) {
+          svg.innerHTML = '<text x="16" y="28">No data</text>';
+          return;
+        }
+
+        const w = 640;
+        const h = 200;
+        const pad = { l: 44, r: 12, t: 12, b: 28 };
+        const xs = rows.map((p) => p.x);
+        const ys = rows.map((p) => p.y);
+        let xMin = Math.min(...xs);
+        let xMax = Math.max(...xs);
+        let yMin = Math.min(...ys);
+        let yMax = Math.max(...ys);
+        if (xMin === xMax) {
+          xMin -= 1;
+          xMax += 1;
+        }
+        if (yMin === yMax) {
+          yMin -= 1;
+          yMax += 1;
+        }
+
+        const xAt = (x) => pad.l + ((x - xMin) / (xMax - xMin)) * (w - pad.l - pad.r);
+        const yAt = (y) => pad.t + ((yMax - y) / (yMax - yMin)) * (h - pad.t - pad.b);
+
+        const line = rows
+          .map((p, i) => (i === 0 ? "M" : "L") + xAt(p.x).toFixed(1) + " " + yAt(p.y).toFixed(1))
+          .join(" ");
+
+        const first = new Date(rows[0].x).toLocaleString();
+        const last = new Date(rows[rows.length - 1].x).toLocaleString();
+        const yTop = Number.isInteger(yMax) ? yMax : yMax.toFixed(1);
+        const yBottom = Number.isInteger(yMin) ? yMin : yMin.toFixed(1);
+
+        svg.innerHTML =
+          '<path d="' + line + '" fill="none" stroke="#222" stroke-width="1.5" />' +
+          '<text x="4" y="' + (pad.t + 10) + '" font-size="11">' + yTop + '</text>' +
+          '<text x="4" y="' + (h - pad.b) + '" font-size="11">' + yBottom + '</text>' +
+          '<text x="' + pad.l + '" y="' + (h - 8) + '" font-size="10">' + first + '</text>' +
+          '<text x="' + (w - pad.r) + '" y="' + (h - 8) + '" font-size="10" text-anchor="end">' + last + '</text>';
+      }
+
+      drawChart("chart-bpm", "bpm");
+      drawChart("chart-spo2", "spo2");
+      drawChart("chart-temperature_c", "temperature_c");
+      drawChart("chart-steps", "steps");
+    </script>
+  </body>
+</html>
