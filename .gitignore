@@ -1,6 +1,5 @@
 /App/node_modules
 /App/android
-/App/node_modules
-/.env
 /App/.env
+/APP/.env.example
 /.claude

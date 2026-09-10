@@ -1,15 +1,7 @@
-import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { API_BASE_URL, AUTH_ENDPOINTS, STORAGE_KEYS } from '../constants/api';
-
-// A plain client for the two auth calls. It deliberately does not reuse
-// src/http/http.js, because that one adds a token we do not have yet.
-const authClient = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
-});
+import { AUTH_ENDPOINTS, STORAGE_KEYS } from '../constants/api';
+import { authClient, clearSession } from './httpClient';
 
 /** Turns whatever axios threw into one sentence we can show the user. */
 function readableError(error, fallback) {
@@ -22,9 +14,10 @@ function readableError(error, fallback) {
   return fallback;
 }
 
-async function saveSession({ token, user }) {
+async function saveSession({ token, refreshToken, user }) {
   const writes = [];
   if (token) writes.push([STORAGE_KEYS.token, token]);
+  if (refreshToken) writes.push([STORAGE_KEYS.refreshToken, refreshToken]);
   if (user) writes.push([STORAGE_KEYS.user, JSON.stringify(user)]);
 
   if (writes.length) await AsyncStorage.multiSet(writes);
@@ -32,7 +25,11 @@ async function saveSession({ token, user }) {
 
 /**
  * Signs in and stores the session.
- * Resolves with { token, user }; throws an Error with a readable message.
+ *
+ * Resolves with { token, refreshToken, user }; throws an Error with a readable
+ * message. `refreshToken` is undefined against a server that does not issue
+ * one, which leaves httpClient with nothing to refresh with - a dead access
+ * token then just signs the user out.
  */
 export async function login({ username, password }) {
   try {
@@ -40,7 +37,11 @@ export async function login({ username, password }) {
       username: username.trim(),
       password,
     });
-    const session = { token: res?.data?.access_token, user: res?.data?.data ?? { username } };
+    const session = {
+      token: res?.data?.access_token,
+      refreshToken: res?.data?.refresh_token,
+      user: res?.data?.data ?? { username },
+    };
     await saveSession(session);
     return session;
   } catch (error) {
@@ -62,6 +63,7 @@ export async function signup({ name, username, password }) {
 
     const session = {
       token: data?.token,
+      refreshToken: data?.refresh_token,
       user: data?.user ?? { name, username },
     };
     if (session.token) await saveSession(session);
@@ -74,7 +76,7 @@ export async function signup({ name, username, password }) {
 
 /** Clears the stored session. */
 export async function logout() {
-  await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.user]);
+  await clearSession();
 }
 
 /** Reads a session saved by an earlier run, or null if there is none. */

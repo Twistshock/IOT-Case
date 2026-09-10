@@ -62,6 +62,7 @@ export default function LoginScreen({ onSuccess, onSignup }) {
     setIsSubmitting(true);
     try {
       const session = await login({ username, password });
+      console.log('Login successful:', session);
 
       setUser(session.user ?? {});
       onSuccess?.(session);

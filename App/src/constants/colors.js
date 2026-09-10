@@ -23,4 +23,6 @@ export const colors = {
   greenSoft: '#E3F6EC',
   danger: '#E5484D',
   dangerSoft: '#FDECEC',
+  warning: '#B7791F', // amber, dark enough to read on warningSoft
+  warningSoft: '#FFF6E0',
 };

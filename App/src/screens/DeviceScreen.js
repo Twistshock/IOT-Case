@@ -76,9 +76,9 @@ export default function DeviceScreen() {
 
 
   async function asyncDevice() {
-    const currentTime = new Date().toISOString();
+    const now = new Date();
     const payload = {
-      timestamp: currentTime,
+      epoch: Math.floor(now.getTime() / 1000),
       username: user?.username || '...', // Replace with actual username if available
       type: 'device_connected',
     }

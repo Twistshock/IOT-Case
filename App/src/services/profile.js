@@ -1,21 +1,7 @@
-import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { API_BASE_URL, PROFILE_ENDPOINTS, STORAGE_KEYS } from '../constants/api';
-
-// Profile calls are all authenticated, so this client attaches the token that
-// login stored under STORAGE_KEYS.token.
-const apiClient = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
-});
-
-apiClient.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem(STORAGE_KEYS.token);
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+import { PROFILE_ENDPOINTS, STORAGE_KEYS } from '../constants/api';
+import { apiClient, clearSession } from './httpClient';
 
 /** The values the profile screen edits, with sensible empty defaults. */
 export const EMPTY_PROFILE = {
@@ -30,12 +16,12 @@ export const SEX_OPTIONS = ['female', 'male', 'other'];
 /** Picks the profile fields out of whatever the user object happens to hold. */
 export function toProfile(user) {
   return {
-    displayname: user?.displayname ?? user?.name ?? '',
-    sex: user?.sex ?? '',
+    displayname: user?.profile?.displayname ?? user?.username ?? '',
+    sex: user?.profile?.sex ?? '',
     height_cm:
-      typeof user?.height_cm === 'number' ? user.height_cm : null,
+      typeof user?.profile?.height_cm === 'number' ? user.profile.height_cm : null,
     weight_kg:
-      typeof user?.weight_kg === 'number' ? user.weight_kg : null,
+      typeof user?.profile?.weight_kg === 'number' ? user.profile.weight_kg : null,
   };
 }
 
@@ -115,7 +101,7 @@ export async function updateProfile(profile) {
  */
 export async function deleteAccount() {
   // TODO: call the backend here, e.g.
-  // await http.delete(PROFILE_ENDPOINTS.deleteAccount);
+  // await apiClient.delete(PROFILE_ENDPOINTS.deleteAccount);
 
-  await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.user]);
+  await clearSession();
 }
