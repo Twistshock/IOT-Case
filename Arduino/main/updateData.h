@@ -74,5 +74,25 @@ void SaveTrackerData()
         markDaysSynced(days);
 }
 
+void UpdateDataSDCard()
+{
+    const time_t epoch = GetEpoch();
+
+    // A save with no known day is refused, and there is nothing to report
+    // to the phone either - it would not know which day it belonged to.
+    if (!saveTrackerData(
+            epoch,
+            STEPS,
+            BURNED_KCAL,
+            HEART_RATE,
+            BLOOD_OXYGEN,
+            TEMPERATURE
+        ))
+    {
+        return;
+    }
+    Serial.println("Saving data to SD-Card.");
+}
+
 
 #endif
