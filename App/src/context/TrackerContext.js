@@ -9,6 +9,7 @@ import React, {
 import { useBleMessages } from '../hooks/useBleMessage';
 import { fetchMeasurementsDB } from '../services/dashbroad';
 import { UserContext } from '../context/userContext';
+import { SaveBpm } from "../services/dashbroad";
 
 const TrackerContext = createContext(null);
 
@@ -17,7 +18,7 @@ export function TrackerProvider({ children }) {
   const [stats, setStats] = useState(null);
   const { user } = useContext(UserContext);
 
-  const { isConnected, send, lastMessage, messages } = useBleMessages(
+  const { isConnected, send, lastMessage, messages, sendMessage } = useBleMessages(
     (text) => {
       try{
         if (!isConnected) return;
@@ -30,6 +31,12 @@ export function TrackerProvider({ children }) {
 
         if(data.type === 'tracker_logs'){
           handleSaveTrackerStats(data.data);
+          return;
+        }
+
+        if(data.type === 'heart_rate_logs'){
+          alert('Tracker BMP logs received. Please check the console for details.');
+          console.log('Tracker BMP logs:', data.data);
           return;
         }
       }
@@ -59,13 +66,14 @@ export function TrackerProvider({ children }) {
     const save = await fetchMeasurementsDB(payload);
     if(save?.ok){
       console.log('Tracker data saved successfully.');
+      sendMessage(JSON.stringify({ type: 'tracker_logs', data: [] }));
     }
   }
 
   
   const value = useMemo(
-    () => ({ stats, isConnected, send, lastMessage, messages }),
-    [stats, isConnected, send, lastMessage, messages]
+    () => ({ stats, isConnected, send, lastMessage, messages, sendMessage }),
+    [stats, isConnected, send, lastMessage, messages, sendMessage]
   );
 
   return (
