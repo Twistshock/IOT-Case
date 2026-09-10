@@ -13,12 +13,16 @@ services:
     image: ${POSTGRES_IMAGE}
     container_name: iot-postgres
     restart: unless-stopped
+    ports:
+      - "192.168.104.10:5432:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      
     volumes:
       # PostgreSQL 18+ official image uses /var/lib/postgresql as the volume root.
+      # We are only on 17.11(pgconfig --version), but might as well use it here as well.
       - postgres-data:/var/lib/postgresql
 
   telegraf:
@@ -54,13 +58,10 @@ services:
     container_name: iot-fitness-ingest
     restart: unless-stopped
     depends_on:
-      - mosquitto
       - postgres
     ports:
       - "192.168.104.10:8080:8080"
     environment:
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
       POSTGRES_HOST: postgres
       FITNESS_DB: ${FITNESS_DB}
       FITNESS_DB_USER: ${FITNESS_DB_USER}
@@ -69,6 +70,8 @@ services:
       HTTP_HOST: "0.0.0.0"
       HTTP_PORT: "8080"
       SEED_USER_ID: "11111111-1111-1111-1111-111111111111"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+
 
 volumes:
   mosquitto-data:
