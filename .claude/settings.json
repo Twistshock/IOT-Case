@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(node -e ' *)",
-      "Bash(npx --no-install babel --presets babel-preset-expo src/services/httpClient.js src/services/auth.js src/services/profile.js src/services/dashbroad.js -o /dev/null)"
-    ]
-  }
-}
