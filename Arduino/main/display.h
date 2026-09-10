@@ -19,7 +19,9 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(
 inline void DisplayInit()
 {
     Wire.begin(OLED_SDA, OLED_SCK);
-    Wire.setClock(400000);
+    // Attempt standard 100 kHz i2C, see if it works. We can always try 400 kHz again if it does not.
+    // Should reduce power draw.
+    Wire.setClock(100000);
 
     oled.begin();
     oled.clearBuffer();
@@ -55,17 +57,44 @@ inline void DisplayHomeScreen(
 
     oled.clearBuffer();
 
-    // Header
+    // Header: the name on the left, the date and clock hard against the right.
+    //
+    // Read live rather than from a cached string. It used to draw the
+    // TIMESTAMP global, which was filled in once at static-init - before the
+    // RTC was even started - and then only rewritten when the phone synced.
+    // So after a power cycle it showed "--/--/-- --:--:--" no matter what the
+    // RTC held, and between syncs it never ticked.
+    //
+    // Drawn in 4x6 rather than the 6x12 the rest of the screen uses, because
+    // "dd/mm/yyyy HH:MM:SS" is 19 characters: 114px at 6px per character, which
+    // leaves nothing for the name on a 128px panel. At 4px it is 76px and a
+    // name of up to 11 characters still fits beside it.
+    oled.setFont(u8g2_font_4x6_tr);
+
+    const String stamp = GetDateTime();
+
+    DrawValueRight(10, stamp.c_str());
+
+    // Gap so the name never butts up against the date
+    constexpr int HEADER_GAP = 4;
+
+    const int nameWidth =
+        128 - 2 - oled.getStrWidth(stamp.c_str()) - HEADER_GAP;
+
+    char name[24];
+    snprintf(name, sizeof(name), "%s", USERNAME.c_str());
+
+    // Trimmed a character at a time, measured rather than assumed, so the name
+    // gives way to the timestamp instead of pushing it off the edge. U8g2 drops
+    // whatever runs past the panel silently, and it is always the tail that
+    // goes - which is how the time came to be invisible before.
+    while (name[0] != '\0' && oled.getStrWidth(name) > nameWidth)
+        name[strlen(name) - 1] = '\0';
+
+    oled.drawStr(0, 10, name);
+
+    // Back to the body font for everything below the divider
     oled.setFont(u8g2_font_6x12_tr);
-    char header[40];
-    snprintf(
-        header,
-        sizeof(header),
-        "%s | %s",
-        USERNAME.c_str(),
-        TIMESTAMP.c_str()
-    );
-    oled.drawStr(0, 10, header);
 
     // Divider under the header
     oled.drawHLine(0, 13, 128);

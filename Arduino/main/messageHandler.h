@@ -7,6 +7,8 @@
 #include "config.h"
 #include "heartRate.h"
 #include "ble.h"
+#include "sdCard.h"
+#include "timeSync.h"
 
 // The message types the phone can send in the "type" field
 enum MessageType
@@ -14,6 +16,7 @@ enum MessageType
   MESSAGE_UNKNOWN,
   MESSAGE_DEVICE_CONNECTED,
   MESSAGE_DASHBROAD_DATA,
+  MESSAGE_CLEAN_TRACKER_LOG,
 };
 
 // C++ can't switch on a string, so the "type" field is turned into an enum first
@@ -25,41 +28,59 @@ inline MessageType ParseMessageType(const char *dataType)
   if (strcmp(dataType, "fetch_dashbroad") == 0)
       return MESSAGE_DASHBROAD_DATA;
 
+  if (strcmp(dataType, "clean_tracker_log") == 0)
+      return MESSAGE_CLEAN_TRACKER_LOG;
+
 
   return MESSAGE_UNKNOWN;
 }
 
-// The phone asked us to sync; pick the account out of the payload
+// The phone asked us to sync. It brings the only clock the tracker has, so
+// this is where time starts running again after a power loss.
 inline void HandleaSyncDevice(JsonDocument &doc)
 {
   const char *username = doc["username"] | "";
 
-  const char *timestamp = doc["timestamp"] | "";
+  // Unix epoch in seconds, UTC
+  time_t epoch = doc["epoch"] | 0;
 
-  // "2026-09-02T10:20:28.324Z" -> "02/09/2026", dropping the time.
-  // %.Ns copies exactly N characters, so each piece can be read straight
-  // out of the middle of the ISO string without cutting it up first.
-  if (strlen(timestamp) >= 10)
+  // Assigning to a String copies the text. Keeping the const char* would
+  // leave USERNAME dangling as soon as doc goes out of scope.
+  USERNAME = username;
+
+  if (SaveTime(epoch))
   {
-      char date[11];
+      // Nothing to cache here: the display reads the clock live, so it keeps
+      // up on its own instead of freezing at the moment of the last connect.
 
-      snprintf(
-          date, sizeof(date), "%.2s/%.2s/%.4s",
-          timestamp + 8,  // day
-          timestamp + 5,  // month
-          timestamp       // year
+      saveUserData(username, GetTimestamp());
+
+      // Today's date is only known now, so today's record can finally be
+      // found. Without this the next timed save would overwrite it with the
+      // counters that have been running from zero since the reboot.
+      readTrackerData();
+
+      // The date has only just become known, so this is the first moment the
+      // card can be sorted into "today" and "older" - and the moment the app
+      // is about to start expecting the older days to arrive.
+      checkOldData();
+
+      Serial.printf(
+          "sync data with username: %s at %s\n",
+          username,
+          GetTimestamp().c_str()
       );
 
-      // Assigning to a String copies the text. Keeping the const char*
-      // would leave TIMESTAMP dangling as soon as doc goes out of scope.
-      TIMESTAMP = date;
-      USERNAME = username;
+      return;
   }
+  
+  // No usable time. Keep the username anyway - it used to be dropped along
+  // with the timestamp, which lost the account for no reason.
+  saveUserData(username, GetTimestamp());
 
   Serial.printf(
-      "sync data with username: %s on %s\n",
-      username,
-      TIMESTAMP.c_str()
+      "sync data with username: %s, but no usable time was sent\n",
+      username
   );
 }
 
@@ -78,6 +99,11 @@ inline void HandleFetchDashbroad(JsonDocument &doc)
       "}";
 
   BLESendMessage(message);
+}
+
+
+void HandleCleanTrackerLog(JsonDocument &doc){
+  //deleteOldData();
 }
 
 // Parse one JSON message from the phone and dispatch on its "type" field
@@ -106,8 +132,13 @@ inline void messageHandler(const char *data)
         break;
       
       case MESSAGE_DASHBROAD_DATA:
-        Serial.println("get_steps");
+        Serial.println("fetch_dashbroad");
         HandleFetchDashbroad(doc);
+        break;
+
+      case MESSAGE_CLEAN_TRACKER_LOG:
+        Serial.println("clean_tracker_log");
+        HandleCleanTrackerLog(doc);
         break;
 
       case MESSAGE_UNKNOWN:

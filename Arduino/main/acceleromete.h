@@ -64,12 +64,33 @@ bool readAcceleration(int16_t &x, int16_t &y, int16_t &z)
     return true;
 }
 
+// Pulse SCL so a child device stuck mid-byte can finish and release SDA
+// Common pattern for I2C recovery
+// https://github.com/maxritter/diy-thermocam/blob/5e2e0c2ad745dea94ba7dacd359c81b29b52c058/firmware/3.0/lib/Wire/WireKinetis.cpp#L533 as an example.
+void recoverI2C()
+{
+    pinMode(SCL_PIN, OUTPUT);
+
+    for (int i = 0; i < 8; i++)
+    {
+        digitalWrite(SCL_PIN, HIGH);
+        delayMicroseconds(5);
+        digitalWrite(SCL_PIN, LOW);
+        delayMicroseconds(5);
+    }
+
+    pinMode(SCL_PIN, INPUT);
+
+    Wire.begin(SDA_PIN, SCL_PIN);
+    Wire.setClock(100000);
+}
+
+
 void AccelerometeInit()
 {
     delay(1000);
 
     Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(100000);
 
     Serial.println("Starting ADXL313...");
 
@@ -92,6 +113,15 @@ void AccelerometeInit()
 
 void AccelerometeLoop()
 {
+    // millis() instead of delay(), so BLE and the display can run between samples
+    static unsigned long lastSampleTime = 0;
+    static unsigned long lastErrorPrint = 0;
+
+    if (millis() - lastSampleTime < 100)
+        return;
+
+    lastSampleTime = millis();
+
     int16_t x;
     int16_t y;
     int16_t z;
@@ -109,12 +139,13 @@ void AccelerometeLoop()
 
         detectStep(x, y, z);
     }
-    else
+    // Avoid spamming the serial console, print error only once every 2.5 seconds
+    else if (millis() - lastErrorPrint >= 2500)
     {
+        lastErrorPrint = millis();
         Serial.println("Failed to read ADXL313");
+        recoverI2C();
     }
-
-    delay(100);
 }
 
 #endif

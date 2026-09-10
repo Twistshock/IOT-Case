@@ -6,27 +6,36 @@
 #include "ble.h"
 #include "messageHandler.h"
 #include "sdCard.h"
+#include "multiTask.h"
+#include "RTC.h"
+#include "timeSync.h"
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
+
+    // Has to run before anything formats or stores a time
+    RTCSetup();
+    TimeSyncInit();
 
     DisplayInit();
     AccelerometeInit();
     HeartRateInit();
     VibrationInit();
     BLEDeviceInit();
+    // Restore user/steps before the first frame so the home screen is not zeros.
     SdCardSetup();
+    MultitaskInit();
 
     ACTIVE_SCREEN = HOME_SCREEN;
 
-    // Initial home-screen values
+
     DisplayHomeScreen(
-        0,      // Steps
-        0.0f,   // Burned kcal
-        0,      // Heart rate in bpm
-        0,      // SpO2 percentage
-        0.0f    // Temperature in Celsius
+        STEPS,
+        BURNED_KCAL,
+        HEART_RATE,
+        BLOOD_OXYGEN,
+        TEMPERATURE
     );
 }
 

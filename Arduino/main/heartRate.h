@@ -36,6 +36,36 @@ inline float LAST_SENSOR_TEMPERATURE = 0.0f;
 
 constexpr unsigned long HEART_RATE_INTERVAL = 4000;
 
+// =====================================================
+// VITALS ALERT
+//
+// Reference ranges for a resting adult: 60-100 bpm, with
+// below 60 bradycardia and above 100 tachycardia, and an
+// SpO2 of 95-100% with below 95% counting as low.
+//
+// These are reference ranges, not a diagnosis. The MAX30102
+// is a hobby sensor and a badly placed finger reads low, so
+// the buzz means "look at this" and nothing more.
+//
+// Both sit inside the bounds IsValidHeartRateReading()
+// enforces, so a reading the sensor threw out as noise can
+// never reach the alert.
+// =====================================================
+
+constexpr int HEART_RATE_TOO_LOW = 40;
+constexpr int HEART_RATE_TOO_HIGH = 140;
+
+// SpO2 has no upper alert: the scale ends at 100 and the validity check has
+// already discarded anything above it, so a high bound could never fire.
+// If 95 proves noisy in practice, 90 is the defensible fallback - that is the
+// level clinical guidance treats as abnormal rather than merely low.
+constexpr int SPO2_TOO_LOW = 95;
+
+// Whether the last usable reading was outside those ranges. The buzz fires on
+// the way in and then stays quiet, so a value that sits abnormal is reported
+// once rather than every four seconds.
+inline bool vitalsWereAbnormal = false;
+
 inline void HeartRateInit()
 {
     Serial.println("Starting MAX30102 on Wire1...");
@@ -79,6 +109,14 @@ inline bool IsValidHeartRateReading(int heartRate, int spo2)
            spo2 <= 100;
 }
 
+// Whether a reading falls outside the resting reference ranges above
+inline bool IsAbnormalVitals(int heartRate, int spo2)
+{
+    return heartRate < HEART_RATE_TOO_LOW ||
+           heartRate > HEART_RATE_TOO_HIGH ||
+           spo2 < SPO2_TOO_LOW;
+}
+
 inline void HeartRateLoop()
 {
     if (!HEART_RATE_READY)
@@ -104,6 +142,12 @@ inline void HeartRateLoop()
     if (heartRate <= 0 && spo2 <= 0)
     {
         fingerWasDetected = false;
+
+        // Taking the finger off ends the measurement, so it ends the alert
+        // episode too. Without this one abnormal reading latches the flag and
+        // no later measurement ever buzzes again.
+        vitalsWereAbnormal = false;
+
         return;
     }
 
@@ -164,6 +208,25 @@ inline void HeartRateLoop()
 
     Serial.print(message);
     BLESendMessage(message);
+
+    // One buzz when a reading first falls outside the reference ranges.
+    // Last in the function on purpose: RunVibration() blocks the main task for
+    // about 440 ms, and the notification the phone is waiting on should not
+    // queue up behind it.
+    const bool abnormal = IsAbnormalVitals(LAST_HEART_RATE, LAST_SPO2);
+
+    if (abnormal && !vitalsWereAbnormal)
+    {
+        Serial.printf(
+            "Vitals outside the normal range: %d bpm, %d%% SpO2\n",
+            LAST_HEART_RATE,
+            LAST_SPO2
+        );
+
+        RunVibration();
+    }
+
+    vitalsWereAbnormal = abnormal;
 }
 
 inline bool IsFingerDetected()
