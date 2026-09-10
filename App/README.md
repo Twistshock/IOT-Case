@@ -14,4 +14,4 @@ Before running the project locally, ask the administrator for the required .env 
 6. Search for the Bluetooth device named “Fitness Tracker V1.0”.
 7. Select the device and connect to it.
 8. Return to the Home screen after connecting.
-9. Your fitness tracker data should now be displayed.
+9. Your fitness tracker data should now be displayed..
