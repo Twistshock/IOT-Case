@@ -8,10 +8,12 @@ Before running the project locally, ask the administrator for the required .env 
 
 1. Installation and Setup
 2. Download and install the app using the Expo build link above.
-3. If you do not have an account, register a new account.
-4. Log in to access the Home screen.
-5. If the Home screen displays “Tracker not connected”, open the Devices screen.
-6. Search for the Bluetooth device named “Fitness Tracker V1.0”.
-7. Select the device and connect to it.
-8. Return to the Home screen after connecting.
-9. Your fitness tracker data should now be displayed..
+3. to run App: npx expo start
+4. Open camera to screen the QR-code.
+5. If you do not have an account, register a new account.
+6. Log in to access the Home screen.
+7. If the Home screen displays “Tracker not connected”, open the Devices screen.
+8. Search for the Bluetooth device named “Fitness Tracker V1.0”.
+9. Select the device and connect to it.
+10. Return to the Home screen after connecting.
+11. Your fitness tracker data should now be displayed..
